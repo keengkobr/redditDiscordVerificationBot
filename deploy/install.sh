@@ -18,7 +18,12 @@
 #      over SSH using root's key (see gen_deploy_key.sh)
 #   4. creates a venv and pip-installs requirements.txt
 #   5. drops a .env from .env.example if one doesn't exist yet (you MUST edit it)
-#   6. installs + enables (but does not start) the two systemd services
+#   6. installs + enables (but does not start) the discord_bot and
+#      webhook_receiver systemd services
+#
+# NOT covered here (DEVVIT_PIVOT_SPEC.md prerequisites -- do these separately):
+#   - nginx + TLS in front of webhook_receiver (see deploy/nginx-verify.conf.example)
+#   - the Devvit app itself (see devvit/) -- deployed via `devvit publish`, not this script
 #
 # Safe to re-run: it's idempotent (git pull instead of re-clone, etc).
 
@@ -84,17 +89,19 @@ echo "==> Installing systemd units"
 sed "s#/opt/redditDiscordVerificationBot#${INSTALL_DIR}#g; s#botuser#${SERVICE_USER}#g" \
     "${INSTALL_DIR}/deploy/discord_bot.service" > /etc/systemd/system/discord_bot.service
 sed "s#/opt/redditDiscordVerificationBot#${INSTALL_DIR}#g; s#botuser#${SERVICE_USER}#g" \
-    "${INSTALL_DIR}/deploy/reddit_poller.service" > /etc/systemd/system/reddit_poller.service
+    "${INSTALL_DIR}/deploy/webhook_receiver.service" > /etc/systemd/system/webhook_receiver.service
 
 systemctl daemon-reload
-systemctl enable discord_bot reddit_poller
+systemctl enable discord_bot webhook_receiver
 
 echo
 echo "==> Done."
 echo "    1. Edit ${INSTALL_DIR}/.env with real credentials/IDs."
-echo "    2. Start everything with:"
-echo "         sudo systemctl start discord_bot reddit_poller"
-echo "    3. Check status/logs with:"
-echo "         sudo systemctl status discord_bot reddit_poller"
+echo "    2. Set up nginx + TLS in front of webhook_receiver (see"
+echo "       deploy/nginx-verify.conf.example) and publish the Devvit app (see devvit/)."
+echo "    3. Start everything with:"
+echo "         sudo systemctl start discord_bot webhook_receiver"
+echo "    4. Check status/logs with:"
+echo "         sudo systemctl status discord_bot webhook_receiver"
 echo "         sudo journalctl -u discord_bot -f"
-echo "         sudo journalctl -u reddit_poller -f"
+echo "         sudo journalctl -u webhook_receiver -f"

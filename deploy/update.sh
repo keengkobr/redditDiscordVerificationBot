@@ -22,6 +22,8 @@ echo "==> Updating Python dependencies"
 chown -R "${SERVICE_USER}:${SERVICE_USER}" "${INSTALL_DIR}"
 
 echo "==> Restarting services"
-systemctl restart discord_bot reddit_poller
+systemctl restart discord_bot webhook_receiver
 
-echo "==> Done. Tail logs with: sudo journalctl -u discord_bot -u reddit_poller -f"
+echo "==> Done. Tail logs with: sudo journalctl -u discord_bot -u webhook_receiver -f"
+echo "    Note: this does not redeploy the Devvit app (devvit/) -- that's separate,"
+echo "    run 'devvit publish' from a machine with the Devvit CLI after code changes there."
