@@ -35,7 +35,7 @@
     },
     "http": {
       "enable": true,
-      "domains": ["verify.yourdomain.com"]
+      "domains": ["verify.verificationforyou.com"]
     }
   },
   "settings": {
