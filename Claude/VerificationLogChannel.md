@@ -1,5 +1,16 @@
 # Feature: Verification Log Channel
 
+> **Implemented.** This was the original design ticket, written against the
+> pre-Devvit-pivot architecture (hence the `reddit_poller.py` references
+> below) and an earlier embed style (bold-only-on-failure text lines). Both
+> have since evolved: the verdict now arrives via the Devvit app + Discord
+> webhook relay (see [DEVVIT_PIVOT_SPEC.md](DEVVIT_PIVOT_SPEC.md)), and the
+> embed format is a full ✅/❌ requirements checklist shared with the Discord
+> DMs, not just bolded failure lines. The schema this ticket introduced is
+> current and documented in [PLAN.md](PLAN.md) Section 5. Kept here for the
+> original design rationale (why these columns, why `logged_to_discord` is
+> tracked independently), not as a description of the current embed format.
+
 ## Goal
 Post a Discord embed to a dedicated log channel for every completed verification attempt — pass or fail — showing the underlying data (account age, karma, subreddit-specific activity) that produced the verdict.
 

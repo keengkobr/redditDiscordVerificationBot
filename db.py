@@ -1,12 +1,11 @@
 """Shared SQLite data-access layer (PLAN.md Section 5).
 
-Both discord_bot.py and reddit_poller.py talk to each other only through
-this database — there is no direct process-to-process communication.
-
-Plain sqlite3 is used (not aiosqlite) so both a sync process (the poller)
-and an async process (the bot, via asyncio.to_thread) can share identical
-logic. WAL mode + a busy timeout let the two processes write concurrently
-without stepping on each other.
+Used directly by both discord_bot.py (its own DB helpers, run off the event
+loop thread via asyncio.to_thread) and verdict.py (a plain function call, no
+separate process) -- both are part of the same discord_bot.py process, per
+DEVVIT_PIVOT_SPEC.md v4's Discord webhook relay design. Plain sqlite3, not
+aiosqlite, so both call sites share identical synchronous logic. WAL mode +
+a busy timeout allow concurrent access without corruption.
 """
 
 import secrets

@@ -2,7 +2,7 @@
 
 Gates a Discord server behind proof of active, non-burner Reddit membership. Full design rationale, thresholds, and roadmap live in [Claude/PLAN.md](Claude/PLAN.md) — this README is setup/run instructions for the current implementation.
 
-**This branch uses Devvit, not PRAW/OAuth script apps** — see [Claude/DEVVIT_PIVOT_SPEC.md](Claude/DEVVIT_PIVOT_SPEC.md) for why. The classic script-app path (`reddit_poller.py`) is parked, not deleted — it's still on `main`/`channelLogging` if that path is ever revived.
+**This project uses Devvit, not PRAW/OAuth script apps** — see [Claude/DEVVIT_PIVOT_SPEC.md](Claude/DEVVIT_PIVOT_SPEC.md) for why. The classic script-app path (`reddit_poller.py`) is parked, not deleted from history — it's on the `channelLogging` branch (pre-Devvit-pivot) if that path is ever revived.
 
 ## How it works
 
@@ -37,7 +37,7 @@ Fill all of the above into `.env`.
 python3 discord_bot.py
 ```
 
-Just one process now. It calls `db.init_db()` on startup, so the schema is created (or migrated in place) automatically — no manual migration step needed. Watch its logs on first startup for a one-time-only line printing the relay webhook's URL — copy that into the Devvit app's `webhookUrl` setting immediately, since it's never logged again (it's the credential, same as an API secret).
+Just one process now. It calls `db.init_db()` on startup, so the schema is created (or migrated in place) automatically — no manual migration step needed. Watch its logs on first startup for a line printing the relay webhook's URL (printed on every startup, not just the first — `journalctl` already requires `sudo` to read, the same privilege level as `.env` itself) — copy that into the Devvit app's `webhookUrl` setting.
 
 ## Devvit app
 
@@ -87,7 +87,7 @@ git clone git@github.com:keengkobr/redditDiscordVerificationBot.git
 sudo bash redditDiscordVerificationBot/deploy/install.sh
 ```
 
-`deploy/install.sh` is idempotent and handles everything: system packages, a dedicated `botuser` system account, cloning into `/opt/redditDiscordVerificationBot` (over the SSH deploy key from step 1), a venv with dependencies installed, a starter `.env` (copied from `.env.example` if missing), and the `discord_bot` systemd service installed + enabled (not started, since `.env` still needs real credentials). No nginx/TLS/domain needed on this branch at all.
+`deploy/install.sh` is idempotent and handles everything: system packages, a dedicated `botuser` system account, cloning into `/opt/redditDiscordVerificationBot` (over the SSH deploy key from step 1), a venv with dependencies installed, a starter `.env` (copied from `.env.example` if missing), and the `discord_bot` systemd service installed + enabled (not started, since `.env` still needs real credentials). No nginx/TLS/domain needed at all.
 
 **3. Fill in `/opt/redditDiscordVerificationBot/.env`**, then:
 
@@ -107,8 +107,4 @@ which pulls, reinstalls dependencies, and restarts the service. (This doesn't to
 
 ## Tuning thresholds
 
-VPS-side numbers (code expiry, cooldown) are environment variables — see `.env.example`. The actual pass/fail thresholds live in the Devvit app's settings (see "Devvit app" above) — change them there without touching code.
-
-## Status
-
-Phase 1 (core verification) is implemented: button/DM flow, code matching, threshold checks (now computed by the Devvit app rather than a PRAW poller — see DEVVIT_PIVOT_SPEC.md), one-Reddit-account-per-Discord-account enforcement, plain-language pass/fail DMs, a mod-review path for both soft-fails (likely hidden/curated profiles) and user-requested manual review, and a verification log channel (see [Claude/VerificationLogChannel.md](Claude/VerificationLogChannel.md)) that posts an embed with the underlying numbers for every completed attempt. The verdict hand-off runs over a Discord webhook relay rather than a self-hosted endpoint (see DEVVIT_PIVOT_SPEC.md v4) — Reddit's HTTP Fetch Policy never approves personal/custom domains. Phases 2-4 (roles/welcome/re-check, moderation, AI features) are not yet built — see PLAN.md Section 7 for the roadmap.
+VPS-side numbers (code expiry, cooldown) are environment variables — see `.env.example`. The actual pass/fail thresholds (account age, karma, subreddit activity) live in the Devvit app's settings (see "Devvit app" above) — change them there without touching code. Current defaults: 30+ days account age, 50+ total karma, 1+ post/comment in the subreddit, 50+ karma in the subreddit.

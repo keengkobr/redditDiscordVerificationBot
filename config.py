@@ -31,10 +31,11 @@ VERIFICATION_LOG_CHANNEL_ID = _get_int("VERIFICATION_LOG_CHANNEL_ID", 0)
 VERIFY_RELAY_CHANNEL_ID = _get_int("VERIFY_RELAY_CHANNEL_ID", 0)
 
 # --- Reddit ---
-# No PRAW/OAuth creds here on this branch -- DEVVIT_PIVOT_SPEC.md retires
-# reddit_poller.py and the script-app auth path entirely in favor of the
-# Devvit app (devvit/) resolving identity/karma itself. That path is parked,
-# not deleted -- see main/channelLogging branches if it's ever revived.
+# No PRAW/OAuth creds here -- DEVVIT_PIVOT_SPEC.md retires reddit_poller.py
+# and the script-app auth path entirely in favor of the Devvit app (devvit/)
+# resolving identity/karma itself. That path is parked, not deleted from
+# history -- see the channelLogging branch (pre-Devvit-pivot) if it's ever
+# revived.
 SUBREDDIT_NAME = os.getenv("SUBREDDIT_NAME", "")
 
 # Permalink to the pinned "Verify for Discord" post -- discord_bot.py DMs this

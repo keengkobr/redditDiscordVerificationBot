@@ -236,34 +236,71 @@ member with a curated profile won't be wrongly soft-failed as
 
 ## `discord_bot.py` changes
 
-- DM copy (`handle_verify_click`): unchanged from v3 — code as plain text
-  plus `config.DEVVIT_POST_URL`.
 - **New**, replacing `webhook_receiver.py` entirely: `ensure_relay_webhook()`
   (finds or creates the Discord webhook on `VERIFY_RELAY_CHANNEL_ID`, logs
-  the URL exactly once on creation — never re-logged, since it's the
-  credential) and an `on_message` handler that validates, parses, and calls
-  `verdict.process_verdict()` directly.
+  the URL every time — journalctl already requires sudo, same privilege
+  level as `.env`, so there's no real security loss in not hiding it after
+  the first run) and an `on_message` handler that validates, parses, and
+  calls `verdict.process_verdict()` directly.
 - `intents.message_content = True` added — needed to read the relay
   webhook's message content. (A privileged intent; toggle it in the Discord
   Developer Portal same as the existing Members intent.)
-- No changes to role assignment, pass/fail DM logic, or the
-  verification-log-channel feature — all still consume `verifications` rows
-  the same way regardless of how they got populated.
+- The role/DM/log-embed poll loop logic itself is unchanged — still consumes
+  `verifications` rows the same way regardless of how they got populated.
+  What *did* change post-launch (below) is presentation, not logic.
+
+## Post-launch polish: embeds everywhere, loosened thresholds
+
+Once the pipeline was confirmed working live, real usage surfaced formatting
+and threshold issues worth fixing before calling this done:
+
+- **Thresholds loosened** from the original PLAN.md §4 starting values
+  (100 total karma / 5 subreddit activity / 20 subreddit karma) down to
+  50 / 1 / 50 — the originals proved unnecessarily strict once tested
+  against a real account. Account age (30 days) unchanged. These are Devvit
+  app settings (`devvit settings set minTotalKarma` etc.); the VPS `.env`'s
+  matching `MIN_*` vars must be updated by hand too (log-embed text only).
+- **One consistent requirements-checklist style, shared everywhere**: the
+  `#verify-here` pinned message, both pass/fail DMs, the verification-log
+  channel embed, and — new — the Devvit post's own result card all render
+  the same ✅/❌-per-requirement checklist now, instead of three or four
+  different ad-hoc formats. `discord_bot.py`'s `_requirement_lines()` is the
+  shared Python-side helper; `verify.submit` now returns `metrics` +
+  `thresholds` alongside `message` so `splash.tsx` can render the matching
+  checklist client-side.
+- **The initial "here's your code" DM became an embed** with the code in a
+  fenced code block (one-tap-to-copy on both desktop and mobile, unlike
+  backticks buried in a sentence) and a real link-style button
+  ("Open Verification Post") instead of a bare pasted URL.
+- **Devvit post UI cleanup**: removed a leftover "Docs" footer link
+  (scaffold boilerplate pointing at Devvit's own developer docs, irrelevant
+  to end users) and fixed a dark-mode bug where the code input's text was
+  hardcoded black (`text-black`) while its background followed the system
+  theme — invisible on a dark background. Now explicit light/dark colors,
+  same pattern as the rest of the page.
+- **Known, accepted tradeoff from the Discord-webhook design**: a
+  double-submitted code no longer gets accurate real-time feedback on the
+  Reddit side. `postVerdict()` only knows whether *Discord* accepted the
+  webhook POST, not whether `verdict.process_verdict()` downstream accepted
+  or rejected it as a duplicate — so a second submission of an
+  already-resolved code shows "Submitted!" same as the first, even though
+  nothing changed in the DB and no second DM follows. Minor (only matters on
+  a fast double-click), not fixed — v3's design could propagate that
+  rejection accurately since it was a direct HTTP round-trip; this is the
+  price of posting to Discord's endpoint instead of our own.
 
 ## What stayed the same across all versions
 
 - `db.py` schema and all its functions.
 - Code generation, expiry, one-account-per-user enforcement.
-- Verification-log-channel feature.
-- Threshold *values* (PLAN.md §4) — same numbers, set in two places kept in
-  sync by hand: the Devvit app's settings (the real decision) and the VPS
-  `.env`'s `MIN_*` vars (only the log embed's "needs N+" text).
+- Verification-log-channel feature (format evolved post-launch, see above;
+  the underlying mechanism — poll loop, `logged_to_discord` flag — didn't).
 
 ## What's retired
 
 - `reddit_poller.py`, `praw`/`prawcore`, all `REDDIT_CLIENT_ID`/`SECRET`/
-  `USERNAME`/`PASSWORD`/`USER_AGENT` env vars — parked on `main`/`channelLogging`'s
-  history if ever revived, not present on this line of work.
+  `USERNAME`/`PASSWORD`/`USER_AGENT` env vars — parked on the `channelLogging`
+  branch's history (pre-Devvit-pivot) if ever revived, not present on `main`.
 - **`webhook_receiver.py`, `fastapi`/`uvicorn`, `deploy/webhook_receiver.service`,
   `deploy/nginx-verify.conf.example`, `DEVVIT_WEBHOOK_SECRET`, `WEBHOOK_PORT`** —
   the entire v3 self-hosted-endpoint design, replaced by the Discord webhook
