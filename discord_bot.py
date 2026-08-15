@@ -166,14 +166,32 @@ async def handle_verify_click(interaction: discord.Interaction) -> None:
     code = result["code"]
 
     try:
-        await interaction.user.send(
-            "**Almost there!** Open the pinned verification post on Reddit, click **Verify**, "
-            "and paste in this code:\n\n"
-            f"`{code}`\n\n"
-            f"{config.DEVVIT_POST_URL}\n\n"
-            f"This code expires in {config.CODE_EXPIRY_MINUTES} minutes. "
-            "You'll get a DM here as soon as it's checked (usually under a minute)."
+        embed = discord.Embed(
+            title="📋 Almost there!",
+            description=(
+                "**1.** Copy the code below\n"
+                "**2.** Click **Open Verification Post**\n"
+                "**3.** Paste the code into the form and hit **Verify** on Reddit"
+            ),
+            color=COLOR_INFO,
         )
+        # A fenced code block, not inline backticks -- renders as its own
+        # tappable/selectable block on both desktop and mobile, easier to
+        # grab in one motion than text buried inline in a sentence.
+        embed.add_field(name="Your code", value=f"```{code}```", inline=False)
+        embed.set_footer(
+            text=f"Expires in {config.CODE_EXPIRY_MINUTES} minutes — you'll get a DM here once it's checked."
+        )
+        link_view = discord.ui.View()
+        link_view.add_item(
+            discord.ui.Button(
+                label="Open Verification Post",
+                style=discord.ButtonStyle.link,
+                url=config.DEVVIT_POST_URL,
+                emoji="🔗",
+            )
+        )
+        await interaction.user.send(embed=embed, view=link_view)
         await interaction.response.send_message("Check your DMs! 📬", ephemeral=True)
     except discord.Forbidden:
         await interaction.response.send_message(
