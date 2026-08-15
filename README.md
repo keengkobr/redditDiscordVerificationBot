@@ -6,8 +6,8 @@ Gates a Discord server behind proof of active, non-burner Reddit membership. Ful
 
 Two independent processes, talking only through a shared SQLite file (`verify.db`):
 
-- **`discord_bot.py`** — posts the pinned Verify button in `#verify-here`, DMs users a pre-filled Reddit message link, and later polls the DB to assign the Verified role or send pass/fail DMs.
-- **`reddit_poller.py`** — polls the bot account's Reddit inbox, matches codes, checks account age/karma/subreddit activity via PRAW, writes the verdict back to the DB.
+- **`discord_bot.py`** — posts the pinned Verify button in `#verify-here`, DMs users a pre-filled Reddit message link, and later polls the DB to assign the Verified role, send pass/fail DMs, and post a per-attempt embed to the verification log channel.
+- **`reddit_poller.py`** — polls the bot account's Reddit inbox, matches codes, checks account age/karma/subreddit activity via PRAW, writes the verdict (and the raw numbers behind it) back to the DB.
 
 ## Setup
 
@@ -22,7 +22,7 @@ You'll need:
 
 1. A **Discord bot application** (Discord Developer Portal) with the bot invited to your server, `Manage Roles` + `Send Messages` + `Read Message History` permissions, and the **Server Members Intent** enabled.
 2. A **Reddit script app** ([reddit.com/prefs/apps](https://www.reddit.com/prefs/apps)) plus a dedicated bot Reddit account, made a **moderator** of your subreddit (see PLAN.md Section 11 — needed for hidden-profile visibility).
-3. IDs for your guild, `#verify-here` channel, `#verify-review` mod channel, and the "Verified" role (enable Developer Mode in Discord to copy IDs).
+3. IDs for your guild, `#verify-here` channel, `#verify-review` mod channel, a `#verification-log` channel, and the "Verified" role (enable Developer Mode in Discord to copy IDs). The bot needs `Send Messages` + `Embed Links` in the log channel.
 
 Fill all of the above into `.env`.
 
@@ -85,4 +85,4 @@ All the numbers from PLAN.md Section 4 (account age, karma, subreddit activity, 
 
 ## Status
 
-Phase 1 (core verification) is implemented: button/DM flow, code matching, threshold checks, one-Reddit-account-per-Discord-account enforcement, plain-language pass/fail DMs, and a mod-review path for both soft-fails (likely hidden/curated profiles) and user-requested manual review. Phases 2-4 (roles/welcome/re-check, moderation, AI features) are not yet built — see PLAN.md Section 7 for the roadmap.
+Phase 1 (core verification) is implemented: button/DM flow, code matching, threshold checks, one-Reddit-account-per-Discord-account enforcement, plain-language pass/fail DMs, a mod-review path for both soft-fails (likely hidden/curated profiles) and user-requested manual review, and a verification log channel (see [Claude/VerificationLogChannel.md](Claude/VerificationLogChannel.md)) that posts an embed with the underlying numbers for every completed attempt. Phases 2-4 (roles/welcome/re-check, moderation, AI features) are not yet built — see PLAN.md Section 7 for the roadmap.
