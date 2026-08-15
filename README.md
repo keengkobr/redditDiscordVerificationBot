@@ -37,7 +37,7 @@ Fill all of the above into `.env`.
 python3 discord_bot.py
 ```
 
-Just one process now. It calls `db.init_db()` on startup, so the schema is created (or migrated in place) automatically — no manual migration step needed. Watch its logs on first startup for a line printing the relay webhook's URL (printed on every startup, not just the first — `journalctl` already requires `sudo` to read, the same privilege level as `.env` itself) — copy that into the Devvit app's `webhookUrl` setting.
+Just one process now. It calls `db.init_db()` on startup, so the schema is created (or migrated in place) automatically — no manual migration step needed. On first startup it creates the Discord relay webhook automatically, logging only its ID — the URL itself (a live credential) is deliberately never logged. To actually retrieve it (e.g. to fill in the Devvit app's `webhookUrl` setting), run `python3 get_relay_webhook_url.py` — it prints straight to your terminal, not to any persistent log.
 
 ## Devvit app
 
@@ -51,7 +51,7 @@ npx devvit playtest              # test against a throwaway dev subreddit first
 Once you're ready to go live on your real subreddit:
 
 ```bash
-npx devvit settings set webhookUrl      # the Discord webhook URL discord_bot.py printed on first startup
+npx devvit settings set webhookUrl      # get this from `python3 get_relay_webhook_url.py` on the VPS
 npm run deploy                          # type-check, lint, test, then devvit upload
 npx devvit publish
 ```

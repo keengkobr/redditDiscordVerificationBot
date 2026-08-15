@@ -45,7 +45,7 @@
       "webhookUrl": {
         "type": "string",
         "label": "Discord webhook URL",
-        "helpText": "The Discord Incoming Webhook discord_bot.py creates on the relay channel -- copy it from that process's logs on first startup. This is the only credential needed now; the URL itself is the secret (personal/custom domains are never approved by Reddit's HTTP Fetch Policy, so this posts to discord.com instead of a self-hosted endpoint).",
+        "helpText": "The Discord Incoming Webhook discord_bot.py creates on the relay channel -- retrieve it by running get_relay_webhook_url.py on the VPS (never logged by discord_bot.py itself, since it's a live credential). This is the only credential needed now; the URL itself is the secret (personal/custom domains are never approved by Reddit's HTTP Fetch Policy, so this posts to discord.com instead of a self-hosted endpoint).",
         "isSecret": true
       },
       "minAccountAgeDays": {

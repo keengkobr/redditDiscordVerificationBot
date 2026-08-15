@@ -267,11 +267,10 @@ RELAY_WEBHOOK_NAME = "Verification Relay"  # Discord rejects webhook names conta
 
 async def ensure_relay_webhook() -> None:
     """Finds or creates the Incoming Webhook the Devvit app POSTs verdicts to.
-    Logs the full URL every time (on creation and on later restarts alike) --
-    journalctl already requires sudo to read, the same privilege level as
-    .env itself, so there's no real security loss in not hiding it after the
-    first run; the earlier "only log once" version just made it awkward to
-    recover the URL if you missed it the first time.
+    Never logs the full URL -- it's a live credential, and journalctl history
+    persists (backups, log shipping, etc. could see it even though reading it
+    directly needs sudo). Logs the webhook ID only; run get_relay_webhook_url.py
+    on demand to actually retrieve the URL when you need it.
     """
     global _relay_webhook_id
 
@@ -284,14 +283,14 @@ async def ensure_relay_webhook() -> None:
     existing = next((w for w in webhooks if w.name == RELAY_WEBHOOK_NAME), None)
     if existing:
         _relay_webhook_id = existing.id
-        print(f"[discord_bot] using existing relay webhook (id={existing.id}), url:\n{existing.url}")
+        print(f"[discord_bot] using existing relay webhook (id={existing.id})")
         return
 
     created = await channel.create_webhook(name=RELAY_WEBHOOK_NAME)
     _relay_webhook_id = created.id
     print(
-        "[discord_bot] created relay webhook — copy this URL into the Devvit app's "
-        f"webhookUrl setting:\n{created.url}"
+        f"[discord_bot] created relay webhook (id={created.id}) — run "
+        "get_relay_webhook_url.py to retrieve its URL for the Devvit app's webhookUrl setting"
     )
 
 

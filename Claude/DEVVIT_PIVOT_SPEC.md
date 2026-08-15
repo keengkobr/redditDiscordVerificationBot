@@ -238,10 +238,13 @@ member with a curated profile won't be wrongly soft-failed as
 
 - **New**, replacing `webhook_receiver.py` entirely: `ensure_relay_webhook()`
   (finds or creates the Discord webhook on `VERIFY_RELAY_CHANNEL_ID`, logs
-  the URL every time — journalctl already requires sudo, same privilege
-  level as `.env`, so there's no real security loss in not hiding it after
-  the first run) and an `on_message` handler that validates, parses, and
-  calls `verdict.process_verdict()` directly.
+  only its ID -- never the URL, a live credential that shouldn't sit in
+  persistent journal history even though reading it directly needs sudo)
+  and an `on_message` handler that validates, parses, and calls
+  `verdict.process_verdict()` directly. `get_relay_webhook_url.py` is a
+  separate one-off script for retrieving the URL on demand, printing straight
+  to the terminal it's run from rather than any persistent log -- this
+  replaced an earlier version that logged the full URL on every restart.
 - `intents.message_content = True` added — needed to read the relay
   webhook's message content. (A privileged intent; toggle it in the Discord
   Developer Portal same as the existing Members intent.)
