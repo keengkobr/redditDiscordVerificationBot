@@ -1,15 +1,21 @@
 #!/usr/bin/env bash
 # Bootstrap script for a fresh Ubuntu/Debian VPS (PLAN.md Section 6).
 #
-# Usage (run as root, or a user with sudo, on the VPS itself):
-#   curl -fsSL https://raw.githubusercontent.com/keengkobr/redditDiscordVerificationBot/main/deploy/install.sh | sudo bash
-# or, if you've already cloned the repo:
+# This repo is PRIVATE, so cloning needs an SSH deploy key set up on the VPS
+# first — see deploy/gen_deploy_key.sh, or the README "Deploying to a VPS"
+# section. Once that's done:
+#
 #   sudo bash deploy/install.sh
+#
+# (or, if you haven't cloned yet but the deploy key is already authorized:
+#   git clone git@github.com:keengkobr/redditDiscordVerificationBot.git
+#   sudo bash redditDiscordVerificationBot/deploy/install.sh )
 #
 # What it does:
 #   1. apt-installs python3/venv/pip/git
 #   2. creates a dedicated unprivileged system user to run the bot
 #   3. clones (or updates) the repo into /opt/redditDiscordVerificationBot
+#      over SSH using root's key (see gen_deploy_key.sh)
 #   4. creates a venv and pip-installs requirements.txt
 #   5. drops a .env from .env.example if one doesn't exist yet (you MUST edit it)
 #   6. installs + enables (but does not start) the two systemd services
@@ -19,7 +25,6 @@
 set -euo pipefail
 
 REPO_URL="${REPO_URL:-git@github.com:keengkobr/redditDiscordVerificationBot.git}"
-REPO_URL_HTTPS="${REPO_URL_HTTPS:-https://github.com/keengkobr/redditDiscordVerificationBot.git}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/redditDiscordVerificationBot}"
 SERVICE_USER="${SERVICE_USER:-botuser}"
 
@@ -42,10 +47,18 @@ if [[ -d "${INSTALL_DIR}/.git" ]]; then
     git -C "${INSTALL_DIR}" pull
 else
     mkdir -p "${INSTALL_DIR}"
-    # Try SSH remote first (works if this box has a deploy key); fall back to HTTPS
-    # (works for a public repo with no auth needed).
-    git clone "${REPO_URL}" "${INSTALL_DIR}" 2>/dev/null \
-        || git clone "${REPO_URL_HTTPS}" "${INSTALL_DIR}"
+    # Private repo — this needs an SSH deploy key already authorized on GitHub
+    # for root's key (see deploy/gen_deploy_key.sh). GIT_SSH_COMMAND disables
+    # interactive host-key/password prompts so a missing key fails fast with a
+    # clear error instead of hanging.
+    if ! GIT_SSH_COMMAND="ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new" \
+        git clone "${REPO_URL}" "${INSTALL_DIR}"; then
+        echo
+        echo "Clone failed — this VPS likely doesn't have an authorized deploy key yet." >&2
+        echo "Run deploy/gen_deploy_key.sh on this VPS, add the printed public key as a" >&2
+        echo "read-only Deploy Key on the GitHub repo, then re-run this script." >&2
+        exit 1
+    fi
 fi
 
 echo "==> Creating virtualenv + installing Python dependencies"

@@ -37,14 +37,30 @@ Both processes call `db.init_db()` on startup, so the schema is created automati
 
 ## Deploying to a VPS
 
-Push this repo to GitHub, then on a fresh Ubuntu/Debian VPS (Section 6 of the plan — Hetzner CX22, DigitalOcean droplet, etc.):
+This repo is **private**, so the VPS needs its own read-only credential before it can clone anything — a GitHub [deploy key](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/managing-deploy-keys). On a fresh Ubuntu/Debian VPS (Section 6 of the plan — Hetzner CX22, DigitalOcean droplet, etc.):
+
+**1. Generate and authorize a deploy key** (one-time, per VPS):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/keengkobr/redditDiscordVerificationBot/main/deploy/gen_deploy_key.sh | sudo bash
+```
+
+That fails the first time (it's a private repo — `raw.githubusercontent.com` can't serve it unauthenticated either). So instead, copy `deploy/gen_deploy_key.sh` to the VPS by hand — paste its contents into a file over SSH, or `scp deploy/gen_deploy_key.sh you@vps:~` from this machine — then:
+
+```bash
+sudo bash gen_deploy_key.sh
+```
+
+It prints a public key. Paste it into the GitHub repo → **Settings → Deploy keys → Add deploy key** (leave "Allow write access" unchecked — read-only is all this needs).
+
+**2. Clone and install:**
 
 ```bash
 git clone git@github.com:keengkobr/redditDiscordVerificationBot.git
 sudo bash redditDiscordVerificationBot/deploy/install.sh
 ```
 
-`deploy/install.sh` is idempotent and handles everything: system packages, a dedicated `botuser` system account, cloning into `/opt/redditDiscordVerificationBot`, a venv with dependencies installed, a starter `.env` (copied from `.env.example` if missing), and the two systemd services installed + enabled (not started, since `.env` still needs real credentials).
+`deploy/install.sh` is idempotent and handles everything: system packages, a dedicated `botuser` system account, cloning into `/opt/redditDiscordVerificationBot` (over the SSH deploy key from step 1), a venv with dependencies installed, a starter `.env` (copied from `.env.example` if missing), and the two systemd services installed + enabled (not started, since `.env` still needs real credentials).
 
 Once you've filled in `/opt/redditDiscordVerificationBot/.env`:
 
