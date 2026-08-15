@@ -225,11 +225,14 @@ Discord" — plain React, code input + Verify button.
    to the Discord webhook URL. Failure is caught and surfaced as a friendly
    in-app message.
 
-**Section 11 (hidden/curated profile) mitigation:** moderator-scope `reddit`
-permission requested, matching the plan's rationale. Still needs the same
-verification PLAN.md always called for — test with an account that has
-actually curated/hidden content, confirming whether `getComments()`/`getPosts()`
-still surface it. Not yet done (see "Still open").
+**Section 11 (hidden/curated profile) mitigation: confirmed working, live.**
+A test account with 1 post + 2 comments hidden from its public profile via
+Reddit's "Curate your profile" setting still had all 3 correctly detected
+(`subreddit_activity_count: 3`, `subreddit_karma: 3` — an exact match) by
+`computeMetrics()` in the real dev-subreddit run. The moderator-scope
+`reddit` permission does what PLAN.md §11 hoped it would — a legitimate
+member with a curated profile won't be wrongly soft-failed as
+`no_visible_activity`.
 
 ## `discord_bot.py` changes
 
@@ -324,14 +327,14 @@ Done:
     Links` overwrite for the bot's role — nothing is inherited by default.)
   - The temporary metrics-logging line added to `trpc.ts` to work around the
     domain block has been removed now that the real path works.
+- **Section 11 curated-profile visibility, confirmed** (PLAN.md §10 item 6) —
+  see above. A test account's hidden posts/comments were correctly detected
+  by the moderator-scope app, exact match on count and karma.
 
 Still open:
 - **"Creates custom posts" app review** — no stated turnaround, blocks
   `devvit install` on the real subreddit (`Drueandgabe`), which blocks
   getting the real `DEVVIT_POST_URL`.
-- The Section 11 curated-profile visibility test (PLAN.md §10 item 6) — not
-  yet done, doesn't depend on the review above, can be tested in the dev
-  subreddit right now.
 - The `getUserKarmaFromCurrentSubreddit()` self-user-exception nuance
   (PLAN.md §10 item 7) — likely moot given it's not wired into `evaluate()`,
   but not formally closed out.

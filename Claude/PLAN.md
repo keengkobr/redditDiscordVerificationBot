@@ -155,18 +155,22 @@ CREATE INDEX idx_code ON verifications(code);
 3. Pick a VPS provider (Hetzner/DigitalOcean/Oracle free tier) and provision it.
 4. Decide Phase 4 AI scope (if any) before estimating that cost bucket further.
 5. Build the MVP (Phase 1) as the first working prototype.
-6. Test the "hidden profile" edge case (Section 11) directly with a mod-account vs non-mod-account before launch.
+6. ~~Test the "hidden profile" edge case (Section 11) directly with a mod-account vs non-mod-account before launch.~~ **Confirmed live.** A test account with all posts/comments hidden via Reddit's "Curate your profile" setting made 1 post + 2 comments in the dev subreddit; the moderator-scope Devvit app correctly detected all 3 (`subreddit_activity_count: 3`, `subreddit_karma: 3` — an exact match, not approximate) despite the content being hidden from the public profile. The moderator-scope mitigation works as intended — a legitimate member with a curated profile will not be wrongly soft-failed as `no_visible_activity`.
 7. Confirm the mod-gated subreddit-karma call (`user.getUserKarmaFromCurrentSubreddit()`) actually requires moderator status for a user *other than* whoever's testing it — the spike so far only proved it works, not that the mod-gating itself is real (the tester and the mod were the same account). See DEVVIT_PIVOT_SPEC.md "Confirmed via spike" section. Overlaps with item 6 above and can likely be tested together.
 
 ---
 
 ## 11. Known Risk: Users With Curated/Hidden Profiles
 
+> **Resolved, confirmed live** (see §10 item 6). Kept below for the original
+> reasoning — the mitigation described here was tested directly, not assumed,
+> and works.
+
 Reddit lets users hide some or all of their posts and comments from their public profile via a "Curate your profile" setting (hide all, or hide per-subreddit). This does **not** delete or hide the comment from the subreddit itself — it only hides it from the user's profile page and, likely, from the same profile-listing API endpoints our verification bot queries (`redditor.comments.new()` / `redditor.submissions.new()`).
 
 **Practical impact:** A genuinely active, legitimate subreddit member could fail the activity check simply because they've curated their profile — a false negative, not a true burner/fresh account.
 
 **Mitigations built into the plan:**
-- Make the Reddit bot account a moderator of the subreddit. Reddit grants mod teams visibility into a user's full profile content history for 28 days after that user interacts with the community (posts, comments, joins) — this may restore visibility for otherwise-hidden activity, though this should be verified directly rather than assumed.
-- Treat "no visible activity found" as a **soft fail**, not a hard rejection — route it to the `#verify-review` mod channel for a human to check manually (e.g., a mod can browse the subreddit directly or ask the user to temporarily un-hide).
-- Before launch, explicitly test this scenario: have a test account hide its comment history and confirm what the poller sees with and without mod-account status.
+- Make the Devvit app a moderator of the subreddit (moderator-scope `reddit` permission, replacing the original PRAW-era "make the bot account a moderator"). Reddit grants mod teams visibility into a user's full profile content history for 28 days after that user interacts with the community (posts, comments, joins) — **confirmed working**: a test account with 1 post + 2 comments hidden via curate-profile was still fully detected (`subreddit_activity_count: 3`, exact match) by the moderator-scope Devvit app.
+- Treat "no visible activity found" as a **soft fail**, not a hard rejection — route it to the `#verify-review` mod channel for a human to check manually (e.g., a mod can browse the subreddit directly or ask the user to temporarily un-hide). Still in place as a fallback for whatever this mitigation doesn't catch (e.g. content hidden longer than the 28-day window, or edge cases not yet hit).
+- ~~Before launch, explicitly test this scenario~~ Done — see §10 item 6.
