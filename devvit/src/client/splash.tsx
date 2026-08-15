@@ -88,11 +88,11 @@ export const Splash = () => {
       </div>
       <form onSubmit={submit} className="flex w-full max-w-xs flex-col items-center gap-2">
         <input
-          className="w-48 rounded border border-gray-300 bg-white px-3 py-2 text-center text-gray-900 placeholder:text-gray-400 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+          className="w-72 rounded border border-gray-300 bg-white px-3 py-2 text-center font-mono text-sm text-gray-900 placeholder:text-gray-400 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
           value={code}
           onChange={(e) => setCode(e.target.value)}
-          placeholder="e.g. X7K2Q9"
-          maxLength={12}
+          placeholder="paste your code here"
+          maxLength={300}
           autoCapitalize="characters"
           disabled={submitting}
         />

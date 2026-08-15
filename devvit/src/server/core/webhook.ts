@@ -2,19 +2,26 @@ import { settings } from '@devvit/web/server';
 
 /**
  * Sends the resolved verdict to a Discord Incoming Webhook (DEVVIT_PIVOT_SPEC.md
- * v4). discord_bot.py reads this same channel directly and writes the verdict
- * into verify.db itself (verdict.py) -- no separate HTTP server on our end.
+ * v4/v5). discord_bot.py reads this same channel directly and holds the
+ * verdict in memory (verdict.py) -- no database, no separate HTTP server on
+ * our end.
  *
  * Why a Discord webhook rather than our own endpoint: Reddit's HTTP Fetch
  * Policy states personal/custom domains "will not be approved" -- only a
  * fixed global allowlist skips review, and discord.com is on it (see
  * devvit.json's permissions.http.domains). A self-hosted VPS domain is a
  * dead end under that policy.
+ *
+ * Deliberately no reddit_username field (v5): Discord already has the
+ * claimed username (the user typed it into a DM themselves), and this app
+ * never sends the *resolved* Reddit identity back to Discord at all --
+ * only whether it matched the claim. See DEVVIT_PIVOT_SPEC.md v5's
+ * "Log-scope compliance boundary" section for why that split matters.
  */
 export type VerdictPayload = {
   code: string;
-  reddit_username: string;
   status: 'verified' | 'failed';
+  username_ok: boolean;
   fail_reason: string | null;
   account_age_days?: number;
   total_karma?: number;

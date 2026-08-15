@@ -22,6 +22,10 @@ DISCORD_GUILD_ID = _get_int("DISCORD_GUILD_ID", 0)
 VERIFY_CHANNEL_ID = _get_int("VERIFY_CHANNEL_ID", 0)
 MOD_REVIEW_CHANNEL_ID = _get_int("MOD_REVIEW_CHANNEL_ID", 0)
 VERIFIED_ROLE_ID = _get_int("VERIFIED_ROLE_ID", 0)
+# Applied by Discord's own member-verification gate to everyone who joins,
+# before this bot ever sees them. Removed on a pass so a verified member
+# doesn't end up holding both roles at once (DEVVIT_PIVOT_SPEC.md v5).
+UNVERIFIED_ROLE_ID = _get_int("UNVERIFIED_ROLE_ID", 0)
 VERIFICATION_LOG_CHANNEL_ID = _get_int("VERIFICATION_LOG_CHANNEL_ID", 0)
 # Hidden, bot-only channel discord_bot.py posts/reads a Discord Incoming
 # Webhook on -- the Devvit app's verdict hand-off (DEVVIT_PIVOT_SPEC.md v4).
@@ -42,9 +46,6 @@ SUBREDDIT_NAME = os.getenv("SUBREDDIT_NAME", "")
 # instead of a prefilled-message compose URL.
 DEVVIT_POST_URL = os.getenv("DEVVIT_POST_URL", "")
 
-# --- Shared DB ---
-DB_PATH = os.getenv("DB_PATH", "verify.db")
-
 # --- Thresholds (PLAN.md Section 4 — tunable) ---
 # These no longer drive the actual pass/fail decision (that now happens in the
 # Devvit app, via its own settings -- see devvit/devvit.json). They're kept
@@ -59,8 +60,11 @@ MIN_SUBREDDIT_KARMA = _get_int("MIN_SUBREDDIT_KARMA", 50)
 CODE_EXPIRY_MINUTES = _get_int("CODE_EXPIRY_MINUTES", 30)
 CODE_COOLDOWN_SECONDS = _get_int("CODE_COOLDOWN_SECONDS", 60)
 
-# --- Polling ---
-POLL_INTERVAL_SECONDS = _get_int("POLL_INTERVAL_SECONDS", 30)
+# --- In-memory session housekeeping (DEVVIT_PIVOT_SPEC.md v5) ---
+# No DB to poll anymore -- verdicts are handled the instant the relay webhook
+# delivers them. This just periodically sweeps abandoned in-memory sessions
+# (user clicked Verify but never finished) so they don't accumulate forever.
+SESSION_SWEEP_INTERVAL_SECONDS = _get_int("SESSION_SWEEP_INTERVAL_SECONDS", 60)
 
 
 def validate(require_discord: bool = False) -> None:

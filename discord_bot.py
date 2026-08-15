@@ -1,32 +1,35 @@
 """Process 1 (PLAN.md Section 2/3): the #verify-here channel, the Verify
-button, DMs, and role assignment. Also polls the shared DB for results the
-Devvit app's verdicts (relayed via a Discord webhook -- see the "Discord
-webhook relay" section below) have written and acts on them (assign role /
-DM / mod alert).
+button, DMs, and role assignment. Also owns the Discord-side half of the
+verdict hand-off (see "Discord webhook relay" below).
 
-Since DEVVIT_PIVOT_SPEC.md v4: also owns the Discord-side half of the
-verdict hand-off. Reddit's HTTP Fetch Policy never approves personal
-domains, only a fixed global allowlist (which includes discord.com) --
-so the Devvit app POSTs its verdict to a Discord Incoming Webhook on a
-hidden relay channel instead of a self-hosted HTTP endpoint, and this
-process reads that channel directly and writes to verify.db itself
-(verdict.py) -- no separate webhook_receiver.py process needed.
+Since DEVVIT_PIVOT_SPEC.md v5: fully stateless. There is no database and no
+verify.db. Every piece of in-flight state lives in the plain dicts below,
+in this process's memory, for the few minutes a verification is actually in
+flight -- see the module docstring in Claude/DEVVIT_PIVOT_SPEC.md for why
+(Devvit Rules' SOC2/pen-test requirement for services that persist a link
+between a Reddit account and an external account). Durable state lives
+where it already belonged: Discord's own role membership ("verified"),
+Discord's own channel history (the verification log), and Devvit's own
+Redis/KV store (the cross-Discord-account anti-duplicate check).
 """
 
-import asyncio
+import base64
 import json
+import re
+import secrets
+import string
+import time
 from datetime import datetime, timezone
 
 import discord
 from discord.ext import commands, tasks
 
 import config
-import db
 import verdict
 
 intents = discord.Intents.default()
 intents.members = True  # needed to look up members and assign roles
-intents.message_content = True  # needed to read the relay webhook's message content
+intents.message_content = True  # needed to read DMs and the relay webhook's messages
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
@@ -34,6 +37,29 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # incoming message actually came from *our* webhook, not just any message
 # dropped into the relay channel.
 _relay_webhook_id: int | None = None
+
+# ---------------------------------------------------------------------------
+# In-memory verification state (DEVVIT_PIVOT_SPEC.md v5 -- no database)
+# ---------------------------------------------------------------------------
+# SESSIONS is keyed by discord_user_id (str). One entry per in-flight
+# verification attempt:
+#   stage: "awaiting_username" -- bot is waiting for the user's DM reply
+#          "awaiting_verdict"  -- code issued, waiting on the relay webhook
+#   claimed_username: the Reddit username the user typed into their DM --
+#       Discord-side, self-reported data (see the compliance note in
+#       DEVVIT_PIVOT_SPEC.md's "Log-scope compliance boundary" section).
+#   short_id: the code half actually looked up on webhook arrival (None
+#       while awaiting_username).
+#   mismatch_count: how many times Devvit has told us this claim didn't
+#       match the real account.
+#   updated_at: epoch seconds, used by sweep_stale_sessions() below.
+SESSIONS: dict[str, dict] = {}
+
+# Reverse index for O(1) webhook lookups: short_id -> discord_user_id.
+# Only holds entries for sessions currently in the "awaiting_verdict" stage.
+CODE_TO_USER: dict[str, str] = {}
+
+USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{3,20}$")
 
 # --- Colors + shared formatting (used by the verify-here embed, DMs, and the
 # verification log channel alike, so all three read as one consistent style) ---
@@ -46,7 +72,6 @@ COLOR_SOFT_FAIL = 0xF1C40F  # amber -- "no visible activity", routed to mod revi
 # produce numbers) -- shown as plain text instead of an empty requirements list.
 FAIL_REASON_TEXT = {
     "reddit_account_not_found": "🔍 We couldn't find that Reddit account.",
-    "code_expired": "⏰ The verification code expired before we received it — click Verify again to get a new one.",
     "reddit_account_already_linked": "🔗 That Reddit account is already linked to a different Discord account.",
 }
 
@@ -62,9 +87,9 @@ def build_verify_embed() -> discord.Embed:
         description=(
             "Unlock the rest of the server by proving you're an active, real Reddit account — "
             "not brand new, not a burner.\n\n"
-            "Click **Verify Reddit Account** below. We'll DM you a one-tap Reddit link — tap it, "
-            "hit **Send**, and you're verified automatically within about a minute. No codes to "
-            "type, nothing to post publicly."
+            "Click **Verify Reddit Account** below. We'll DM you to ask which Reddit account is "
+            "yours, then send you a one-tap link — tap it, hit **Verify** on Reddit, and you're "
+            "verified automatically within about a minute."
         ),
         color=COLOR_INFO,
     )
@@ -81,7 +106,7 @@ def build_verify_embed() -> discord.Embed:
     return embed
 
 
-def _requirement_lines(row) -> list[str]:
+def _requirement_lines(row: dict) -> list[str]:
     """One bold, checkmarked line per requirement -- the shared building block
     behind the verify DM, pass/fail DMs, and the log channel embed, so all of
     them read as one consistent style instead of three different formats.
@@ -107,21 +132,40 @@ def _requirement_lines(row) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# DB helpers (sqlite3 is sync; run it off the event loop thread)
+# Username claim normalization + code<->claim encoding
 # ---------------------------------------------------------------------------
 
-def _run_db_sync(fn, args):
-    conn = db.connect(config.DB_PATH)
-    try:
-        result = fn(conn, *args)
-        conn.commit()
-        return result
-    finally:
-        conn.close()
+def normalize_username(raw: str) -> str | None:
+    """Strips an optional u/ or /u/ prefix and whitespace, lowercases, and
+    validates against Reddit's username character rules. Returns None for
+    anything that doesn't look like a plausible username.
+    """
+    candidate = raw.strip()
+    for prefix in ("/u/", "u/"):
+        if candidate.lower().startswith(prefix):
+            candidate = candidate[len(prefix):]
+            break
+    if not USERNAME_RE.match(candidate):
+        return None
+    return candidate.lower()
 
 
-async def run_db(fn, *args):
-    return await asyncio.to_thread(_run_db_sync, fn, args)
+def generate_short_id(length: int = 6) -> str:
+    alphabet = string.ascii_uppercase + string.digits
+    return "".join(secrets.choice(alphabet) for _ in range(length))
+
+
+def build_code(short_id: str, claimed_username: str, discord_user_id: str) -> str:
+    """Packs the claim into the code the user pastes into the Devvit form --
+    this is the *only* channel that exists for Discord-side data to reach
+    the Devvit app at all (it can't fetch our VPS, and we can't call into
+    it -- see DEVVIT_PIVOT_SPEC.md v5's "inbound-callback problem"). Not
+    encryption, just packing -- Devvit unpacks it locally to compare against
+    the real identity it resolves, and never echoes the claim back to us.
+    """
+    blob = json.dumps({"u": claimed_username, "d": discord_user_id}, separators=(",", ":")).encode()
+    encoded = base64.urlsafe_b64encode(blob).decode().rstrip("=")
+    return f"{short_id}.{encoded}"
 
 
 # ---------------------------------------------------------------------------
@@ -145,59 +189,101 @@ class VerifyView(discord.ui.View):
 
 async def handle_verify_click(interaction: discord.Interaction) -> None:
     discord_user_id = str(interaction.user.id)
-    result = await run_db(
-        db.create_or_get_pending,
-        discord_user_id,
-        config.CODE_EXPIRY_MINUTES * 60,
-        config.CODE_COOLDOWN_SECONDS,
-    )
+    member = interaction.user if isinstance(interaction.user, discord.Member) else None
 
-    if result["state"] == "already_verified":
+    if member and config.VERIFIED_ROLE_ID and any(r.id == config.VERIFIED_ROLE_ID for r in member.roles):
         await interaction.response.send_message("You're already verified! ✅", ephemeral=True)
         return
 
-    if result["state"] == "reused" and result.get("rate_limited"):
-        await interaction.response.send_message(
-            "You've already got a code waiting — check your DMs for it.",
-            ephemeral=True,
-        )
-        return
+    now = time.time()
+    session = SESSIONS.get(discord_user_id)
+    if session and now - session["updated_at"] < config.CODE_EXPIRY_MINUTES * 60:
+        if session["stage"] == "awaiting_username":
+            await interaction.response.send_message(
+                "Check your DMs — reply there with your Reddit username to continue.",
+                ephemeral=True,
+            )
+            return
+        if now - session["updated_at"] < config.CODE_COOLDOWN_SECONDS:
+            await interaction.response.send_message(
+                "You've already got a code waiting — check your DMs for it.",
+                ephemeral=True,
+            )
+            return
 
-    code = result["code"]
+    SESSIONS[discord_user_id] = {
+        "stage": "awaiting_username",
+        "claimed_username": None,
+        "short_id": None,
+        "mismatch_count": 0,
+        "updated_at": now,
+    }
 
     try:
         embed = discord.Embed(
-            title="📋 Almost there!",
+            title="👋 Which Reddit account is yours?",
             description=(
-                "**1.** Copy the code below\n"
-                "**2.** Click **Open Verification Post**\n"
-                "**3.** Paste the code into the form and hit **Verify** on Reddit"
+                "Reply to this DM with your Reddit username (e.g. `u/yourname` or just "
+                "`yourname`) and we'll send you a one-tap link to finish verifying."
             ),
             color=COLOR_INFO,
         )
-        # A fenced code block, not inline backticks -- renders as its own
-        # tappable/selectable block on both desktop and mobile, easier to
-        # grab in one motion than text buried inline in a sentence.
-        embed.add_field(name="Your code", value=f"```{code}```", inline=False)
-        embed.set_footer(
-            text=f"Expires in {config.CODE_EXPIRY_MINUTES} minutes — you'll get a DM here once it's checked."
-        )
-        link_view = discord.ui.View()
-        link_view.add_item(
-            discord.ui.Button(
-                label="Open Verification Post",
-                style=discord.ButtonStyle.link,
-                url=config.DEVVIT_POST_URL,
-                emoji="🔗",
-            )
-        )
-        await interaction.user.send(embed=embed, view=link_view)
+        await interaction.user.send(embed=embed)
         await interaction.response.send_message("Check your DMs! 📬", ephemeral=True)
     except discord.Forbidden:
+        del SESSIONS[discord_user_id]
         await interaction.response.send_message(
             "I can't DM you — enable DMs from server members (Privacy Settings) and click Verify again.",
             ephemeral=True,
         )
+
+
+async def handle_username_reply(message: discord.Message, session: dict) -> None:
+    discord_user_id = str(message.author.id)
+    normalized = normalize_username(message.content)
+    if not normalized:
+        await message.channel.send(
+            "That doesn't look like a Reddit username — usually 3-20 letters/numbers/underscores, "
+            "optionally starting with `u/`. Try again?"
+        )
+        return
+
+    short_id = generate_short_id()
+    session.update(
+        stage="awaiting_verdict",
+        claimed_username=normalized,
+        short_id=short_id,
+        updated_at=time.time(),
+    )
+    CODE_TO_USER[short_id] = discord_user_id
+
+    code = build_code(short_id, normalized, discord_user_id)
+    embed = discord.Embed(
+        title="📋 Almost there!",
+        description=(
+            "**1.** Copy the code below\n"
+            "**2.** Click **Open Verification Post**\n"
+            "**3.** Paste the code into the form and hit **Verify** on Reddit"
+        ),
+        color=COLOR_INFO,
+    )
+    # A fenced code block, not inline backticks -- renders as its own
+    # tappable/selectable block on both desktop and mobile, easier to
+    # grab in one motion than text buried inline in a sentence.
+    embed.add_field(name="Your code", value=f"```{code}```", inline=False)
+    embed.set_footer(
+        text=f"Expires in {config.CODE_EXPIRY_MINUTES} minutes — you'll get a DM here once it's checked."
+    )
+    link_view = discord.ui.View()
+    link_view.add_item(
+        discord.ui.Button(
+            label="Open Verification Post",
+            style=discord.ButtonStyle.link,
+            url=config.DEVVIT_POST_URL,
+            emoji="🔗",
+        )
+    )
+    await message.channel.send(embed=embed, view=link_view)
 
 
 # ---------------------------------------------------------------------------
@@ -205,18 +291,21 @@ async def handle_verify_click(interaction: discord.Interaction) -> None:
 # ---------------------------------------------------------------------------
 
 class ManualReviewView(discord.ui.View):
-    """Not registered persistently on purpose: the button has no bound callback,
-    so clicks are handled by the raw on_interaction listener below via custom_id
-    parsing. That works even after a bot restart, since it needs no view cache.
+    """Persistent (survives restarts) -- the button's custom_id carries no
+    per-message data on purpose. There's nothing left to look up by the time
+    it's clicked (v5 has no DB, and the in-memory session is long gone by
+    then), so the handler below just re-reads whatever this exact message's
+    own embed already shows -- Discord's own message history is already the
+    durable copy of that data, nothing needs to be re-fetched from anywhere.
     """
 
-    def __init__(self, verification_id: int):
+    def __init__(self):
         super().__init__(timeout=None)
         self.add_item(
             discord.ui.Button(
                 label="Request Manual Review",
                 style=discord.ButtonStyle.secondary,
-                custom_id=f"request_review:{verification_id}",
+                custom_id="request_review",
             )
         )
 
@@ -226,37 +315,29 @@ async def on_interaction(interaction: discord.Interaction) -> None:
     if interaction.type != discord.InteractionType.component:
         return
     custom_id = interaction.data.get("custom_id", "") if interaction.data else ""
-    if not custom_id.startswith("request_review:"):
+    if custom_id != "request_review":
         return
 
     # Discord requires a response within 3 seconds or shows "didn't respond in
-    # time" -- even if the action actually completes right after. The DB
-    # lookup below can occasionally take longer than that (db.py's 30-second
-    # busy_timeout means a concurrent write elsewhere can stall a read), so
-    # acknowledge immediately and do the real work via a followup instead of
-    # risking that window on every click.
+    # time" -- defer immediately and do the real work via a followup so a slow
+    # mod-channel send can't blow that window.
     await interaction.response.defer(ephemeral=True)
 
-    verification_id = int(custom_id.split(":", 1)[1])
-    row = await run_db(db.get_verification_by_id, verification_id)
-    if not row:
-        await interaction.followup.send(
-            "Couldn't find that verification record — try clicking Verify again.", ephemeral=True
-        )
-        return
+    original_embed = interaction.message.embeds[0] if interaction.message and interaction.message.embeds else None
 
     mod_channel = bot.get_channel(config.MOD_REVIEW_CHANNEL_ID)
     posted_to_mods = False
     if mod_channel:
         embed = discord.Embed(
             title="🔎 Manual Review Requested",
-            description=f"<@{row['discord_user_id']}> — u/{row['reddit_username'] or 'unknown'}",
+            description=f"<@{interaction.user.id}>",
             color=COLOR_SOFT_FAIL,
         )
-        if row["fail_reason"] in FAIL_REASON_TEXT:
-            embed.add_field(name="Reason", value=FAIL_REASON_TEXT[row["fail_reason"]], inline=False)
-        else:
-            embed.add_field(name="Requirements", value="\n".join(_requirement_lines(row)), inline=False)
+        if original_embed:
+            if original_embed.description:
+                embed.description += f"\n{original_embed.description}"
+            for field in original_embed.fields:
+                embed.add_field(name=field.name, value=field.value, inline=field.inline)
         try:
             await mod_channel.send(embed=embed)
             posted_to_mods = True
@@ -264,7 +345,7 @@ async def on_interaction(interaction: discord.Interaction) -> None:
             # A permission gap in the mod channel shouldn't also silently eat
             # the user's confirmation below -- tell them honestly instead of
             # leaving the click looking like it did nothing.
-            print(f"[discord_bot] missing permission to post in MOD_REVIEW_CHANNEL_ID for verification_id={verification_id}")
+            print(f"[discord_bot] missing permission to post in MOD_REVIEW_CHANNEL_ID (manual review, user={interaction.user.id})")
 
     await interaction.followup.send(
         "Sent to the mod team — someone will follow up soon."
@@ -280,7 +361,46 @@ async def on_interaction(interaction: discord.Interaction) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Discord webhook relay (replaces webhook_receiver.py, DEVVIT_PIVOT_SPEC.md v4)
+# Unlink
+# ---------------------------------------------------------------------------
+
+@bot.tree.command(name="unlink", description="Remove your Verified role so you can re-verify.")
+async def unlink(interaction: discord.Interaction) -> None:
+    member = interaction.user if isinstance(interaction.user, discord.Member) else None
+    if not member or not config.VERIFIED_ROLE_ID:
+        await interaction.response.send_message("Nothing to unlink.", ephemeral=True)
+        return
+
+    role = interaction.guild.get_role(config.VERIFIED_ROLE_ID) if interaction.guild else None
+    if not role or role not in member.roles:
+        await interaction.response.send_message("You're not currently verified.", ephemeral=True)
+        return
+
+    try:
+        await member.remove_roles(role, reason="Self-service unlink")
+        if config.UNVERIFIED_ROLE_ID:
+            unverified_role = interaction.guild.get_role(config.UNVERIFIED_ROLE_ID)
+            if unverified_role:
+                await member.add_roles(unverified_role, reason="Self-service unlink")
+    except discord.Forbidden:
+        await interaction.response.send_message(
+            "I don't have permission to change your roles — let a mod know.", ephemeral=True
+        )
+        return
+
+    # Nothing to delete on our side -- there's no database. Devvit's own
+    # anti-duplicate KV entry expires on its own TTL (30 days); re-verifying
+    # under this same Discord account is not blocked by that at all, only
+    # moving the Reddit account to a *different* Discord account is (see
+    # DEVVIT_PIVOT_SPEC.md v5's unlink section).
+    await interaction.response.send_message(
+        "Unlinked — click **Verify Reddit Account** any time to link a Reddit account again.",
+        ephemeral=True,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Discord webhook relay (replaces webhook_receiver.py, DEVVIT_PIVOT_SPEC.md v4/v5)
 # ---------------------------------------------------------------------------
 
 RELAY_WEBHOOK_NAME = "Verification Relay"  # Discord rejects webhook names containing "discord"
@@ -319,8 +439,17 @@ async def ensure_relay_webhook() -> None:
 async def on_message(message: discord.Message) -> None:
     # Overriding on_message on a commands.Bot normally requires calling
     # bot.process_commands(message) to keep prefix commands working -- not
-    # needed here since this bot defines none (everything is buttons/
-    # interactions). If that changes, add the call back.
+    # needed here since this bot defines none (everything is buttons/slash
+    # commands/interactions). If that changes, add the call back.
+    if message.author.id == bot.user.id:
+        return
+
+    if isinstance(message.channel, discord.DMChannel):
+        session = SESSIONS.get(str(message.author.id))
+        if session and session["stage"] == "awaiting_username":
+            await handle_username_reply(message, session)
+        return
+
     if message.channel.id != config.VERIFY_RELAY_CHANNEL_ID:
         return
     if message.webhook_id is None or message.webhook_id != _relay_webhook_id:
@@ -331,60 +460,128 @@ async def on_message(message: discord.Message) -> None:
     try:
         payload = json.loads(message.content)
     except (json.JSONDecodeError, TypeError):
-        print(f"[discord_bot] relay message wasn't valid JSON: {message.content!r}")
+        # Never log message.content here -- it's untrusted relay traffic and
+        # could echo back a claimed username on a malformed payload. A bare
+        # tag is enough to notice this is happening; body content stays out
+        # of any persistent log (DEVVIT_PIVOT_SPEC.md v5's logging note).
+        print("[discord_bot] relay message wasn't valid JSON")
+        return
+
+    short_id = str(payload.get("code", ""))
+    try:
+        verdict_payload = verdict.parse_verdict(payload)
+    except verdict.VerdictError as exc:
+        print(f"[discord_bot] relay: rejected malformed verdict for code {short_id!r}: {exc}")
+        return
+
+    await handle_verdict(short_id, verdict_payload)
+
+
+async def handle_verdict(short_id: str, payload: "verdict.VerdictPayload") -> None:
+    discord_user_id = CODE_TO_USER.get(short_id)
+    session = SESSIONS.get(discord_user_id) if discord_user_id else None
+    if not discord_user_id or not session or session.get("short_id") != short_id:
+        # Expired, already resolved, or the bot restarted mid-flow -- this is
+        # the natural idempotency guard in a stateless design. If someone
+        # reports "I verified and got nothing," this line plus the short_id
+        # (no username, no Discord ID) is the diagnostic trail; the fallback
+        # is a mod manually granting the role, a plain Discord action.
+        print(f"[discord_bot] relay: no session for code {short_id!r} — discarding")
+        return
+
+    CODE_TO_USER.pop(short_id, None)
+
+    if not payload.username_ok:
+        session["mismatch_count"] += 1
+        session["short_id"] = None
+        if session["mismatch_count"] >= 3:
+            await flag_username_mismatch_for_mods(discord_user_id, session)
+            SESSIONS.pop(discord_user_id, None)
+            try:
+                user = await bot.fetch_user(int(discord_user_id))
+                await user.send(
+                    "We couldn't confirm that Reddit account matches after a few tries — "
+                    "we've flagged this for a mod to take a look."
+                )
+            except discord.Forbidden:
+                pass
+        else:
+            session["stage"] = "awaiting_username"
+            session["updated_at"] = time.time()
+            try:
+                user = await bot.fetch_user(int(discord_user_id))
+                await user.send(
+                    f"That didn't match the Reddit account you told us about "
+                    f"({session['mismatch_count']}/3). Reply here with your Reddit username to try again."
+                )
+            except discord.Forbidden:
+                pass
+        return
+
+    row = {
+        "discord_user_id": discord_user_id,
+        "reddit_username": session["claimed_username"],
+        "status": payload.status,
+        "fail_reason": payload.fail_reason,
+        "account_age_days": payload.account_age_days,
+        "total_karma": payload.total_karma,
+        "subreddit_activity_count": payload.subreddit_activity_count,
+        "subreddit_karma": payload.subreddit_karma,
+        "verified_at": time.time() if payload.status == "verified" else None,
+    }
+    SESSIONS.pop(discord_user_id, None)
+
+    try:
+        await handle_result(row)
+    except Exception as exc:  # noqa: BLE001 - one bad verdict shouldn't crash the listener
+        print(f"[discord_bot] error handling verdict for code {short_id!r}: {exc}")
         return
 
     try:
-        await run_db_verdict(payload)
-        print(f"[discord_bot] relay: processed verdict for code {payload.get('code')!r}")
-    except verdict.VerdictError as exc:
-        print(f"[discord_bot] relay: rejected verdict for code {payload.get('code')!r}: {exc}")
+        await post_verification_log(row)
+    except Exception as exc:  # noqa: BLE001 - log-posting failures shouldn't lose the role/DM work above
+        print(f"[discord_bot] error posting verification log for code {short_id!r}: {exc}")
 
 
-async def run_db_verdict(payload: dict) -> None:
-    await asyncio.to_thread(verdict.process_verdict, payload)
+async def flag_username_mismatch_for_mods(discord_user_id: str, session: dict) -> None:
+    mod_channel = bot.get_channel(config.MOD_REVIEW_CHANNEL_ID)
+    if not mod_channel:
+        return
+    embed = discord.Embed(
+        title="🔎 Manual Review Requested",
+        description=(
+            f"<@{discord_user_id}> couldn't confirm a Reddit account after 3 attempts.\n"
+            f"Last claimed: u/{session['claimed_username']}"
+        ),
+        color=COLOR_SOFT_FAIL,
+    )
+    try:
+        await mod_channel.send(embed=embed)
+    except discord.Forbidden:
+        print(f"[discord_bot] missing permission to post in MOD_REVIEW_CHANNEL_ID (username mismatch, user={discord_user_id})")
 
 
 # ---------------------------------------------------------------------------
-# Background: pick up results the poller has written
+# Role assignment, DMs, mod alerts
 # ---------------------------------------------------------------------------
 
-@tasks.loop(seconds=config.POLL_INTERVAL_SECONDS)
-async def process_results() -> None:
-    rows = await run_db(db.get_unprocessed_results)
-    for row in rows:
-        try:
-            await handle_result(row)
-        except Exception as exc:  # noqa: BLE001 - one bad row shouldn't stall the loop
-            print(f"[discord_bot] error handling result id={row['id']}: {exc}")
-        finally:
-            await run_db(db.mark_processed, row["id"])
-
-    # Tracked via its own logged_to_discord flag rather than processed_at, so a
-    # crash between role/DM handling and log-posting still gets the log entry
-    # posted on the next pass or after a restart (VerificationLogChannel.md).
-    log_rows = await run_db(db.get_unlogged_results)
-    for row in log_rows:
-        try:
-            await post_verification_log(row)
-        except Exception as exc:  # noqa: BLE001 - retry next loop instead of losing the entry
-            print(f"[discord_bot] error posting verification log id={row['id']}: {exc}")
-        else:
-            await run_db(db.mark_logged, row["id"])
-
-
-async def handle_result(row) -> None:
+async def handle_result(row: dict) -> None:
     guild = bot.get_guild(config.DISCORD_GUILD_ID)
     member = guild.get_member(int(row["discord_user_id"])) if guild else None
 
     if row["status"] == "verified":
-        if member and config.VERIFIED_ROLE_ID:
-            role = guild.get_role(config.VERIFIED_ROLE_ID)
-            if role:
-                try:
-                    await member.add_roles(role, reason="Passed Reddit verification")
-                except discord.Forbidden:
-                    print(f"[discord_bot] missing permission to assign role to {row['discord_user_id']}")
+        if member:
+            try:
+                if config.VERIFIED_ROLE_ID:
+                    role = guild.get_role(config.VERIFIED_ROLE_ID)
+                    if role:
+                        await member.add_roles(role, reason="Passed Reddit verification")
+                if config.UNVERIFIED_ROLE_ID:
+                    unverified_role = guild.get_role(config.UNVERIFIED_ROLE_ID)
+                    if unverified_role and unverified_role in member.roles:
+                        await member.remove_roles(unverified_role, reason="Passed Reddit verification")
+            except discord.Forbidden:
+                print(f"[discord_bot] missing permission to update roles for {row['discord_user_id']}")
         try:
             user = member or await bot.fetch_user(int(row["discord_user_id"]))
             embed = discord.Embed(
@@ -411,7 +608,7 @@ async def handle_result(row) -> None:
                     embed.description = NO_VISIBLE_ACTIVITY_NOTE
 
             embed.set_footer(text="Think this is a mistake? Request a manual review below.")
-            await user.send(embed=embed, view=ManualReviewView(row["id"]))
+            await user.send(embed=embed, view=ManualReviewView())
         except discord.Forbidden:
             pass
 
@@ -434,17 +631,16 @@ async def handle_result(row) -> None:
                 except discord.Forbidden:
                     # Not fatal here (the user's own fail DM with a manual-review
                     # button already went out above) -- but worth a clear log
-                    # line rather than a bare exception bubbling up to
-                    # process_results' generic catch-all.
-                    print(f"[discord_bot] missing permission to post soft-fail flag in MOD_REVIEW_CHANNEL_ID for id={row['id']}")
+                    # line rather than a bare exception bubbling up to the
+                    # relay handler's generic catch-all.
+                    print(f"[discord_bot] missing permission to post soft-fail flag in MOD_REVIEW_CHANNEL_ID for {row['discord_user_id']}")
 
 
 # ---------------------------------------------------------------------------
 # Verification log channel (VerificationLogChannel.md)
 # ---------------------------------------------------------------------------
 
-
-async def post_verification_log(row) -> None:
+async def post_verification_log(row: dict) -> None:
     channel = bot.get_channel(config.VERIFICATION_LOG_CHANNEL_ID)
     if not channel:
         return  # Not configured — logging is optional.
@@ -487,6 +683,20 @@ async def post_verification_log(row) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Session housekeeping
+# ---------------------------------------------------------------------------
+
+@tasks.loop(seconds=config.SESSION_SWEEP_INTERVAL_SECONDS)
+async def sweep_stale_sessions() -> None:
+    cutoff = time.time() - config.CODE_EXPIRY_MINUTES * 60
+    stale = [uid for uid, session in SESSIONS.items() if session["updated_at"] < cutoff]
+    for uid in stale:
+        session = SESSIONS.pop(uid, None)
+        if session and session.get("short_id"):
+            CODE_TO_USER.pop(session["short_id"], None)
+
+
+# ---------------------------------------------------------------------------
 # Startup
 # ---------------------------------------------------------------------------
 
@@ -508,15 +718,16 @@ async def ensure_verify_message() -> None:
 async def on_ready() -> None:
     print(f"[discord_bot] logged in as {bot.user}")
     bot.add_view(VerifyView())
+    bot.add_view(ManualReviewView())
+    await bot.tree.sync()
     await ensure_verify_message()
     await ensure_relay_webhook()
-    if not process_results.is_running():
-        process_results.start()
+    if not sweep_stale_sessions.is_running():
+        sweep_stale_sessions.start()
 
 
 def main() -> None:
     config.validate(require_discord=True)
-    db.init_db(config.DB_PATH)
     bot.run(config.DISCORD_BOT_TOKEN)
 
 

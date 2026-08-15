@@ -1,15 +1,17 @@
 # Feature: Verification Log Channel
 
-> **Implemented.** This was the original design ticket, written against the
-> pre-Devvit-pivot architecture (hence the `reddit_poller.py` references
-> below) and an earlier embed style (bold-only-on-failure text lines). Both
-> have since evolved: the verdict now arrives via the Devvit app + Discord
-> webhook relay (see [DEVVIT_PIVOT_SPEC.md](DEVVIT_PIVOT_SPEC.md)), and the
-> embed format is a full ✅/❌ requirements checklist shared with the Discord
-> DMs, not just bolded failure lines. The schema this ticket introduced is
-> current and documented in [PLAN.md](PLAN.md) Section 5. Kept here for the
-> original design rationale (why these columns, why `logged_to_discord` is
-> tracked independently), not as a description of the current embed format.
+> **Implemented, but the underlying storage this ticket describes is gone.**
+> This was the original design ticket, written against the pre-Devvit-pivot
+> architecture (hence the `reddit_poller.py` references below), an earlier
+> embed style (bold-only-on-failure text lines), and a `verify.db`/`db.py`
+> schema that no longer exists. As of DEVVIT_PIVOT_SPEC.md v5 there is no
+> database at all — the log embed is built directly from the webhook verdict
+> plus the in-memory session's claimed username, not from a
+> `logged_to_discord` column. See [PLAN.md](PLAN.md) Section 5 and
+> [DEVVIT_PIVOT_SPEC.md](DEVVIT_PIVOT_SPEC.md) for the current design. Kept
+> here for the original design rationale (why log everything including
+> fails, why the embed shows raw numbers), not as a description of the
+> current storage or embed format.
 
 ## Goal
 Post a Discord embed to a dedicated log channel for every completed verification attempt — pass or fail — showing the underlying data (account age, karma, subreddit-specific activity) that produced the verdict.

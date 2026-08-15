@@ -1,380 +1,226 @@
-# Pivot v4: Devvit Web + Discord Webhook Relay (as-built)
+# Pivot v5: Fully Stateless VPS -- No Persistent Database At All
 
-> **Status: implemented on `main`.** This document went through several
-> revisions as real testing corrected each prior version's assumptions (v1:
-> inbox polling — never confirmed possible; v2: Blocks/forms custom post —
-> wrong API generation; v3: Devvit Web + self-hosted VPS webhook — worked
-> right up until Reddit's own HTTP Fetch Policy ruled out ever approving a
-> personal domain). This version replaces the VPS webhook with a Discord
-> Incoming Webhook and is believed final. Earlier sections are kept only
-> where the underlying fact is still true (API surface, timings, permission
-> gotchas) — the *transport* described in v1-v3 is history, not guidance.
+**Status: IMPLEMENTED.** No outreach to Reddit/Devvit was made before building this -- the SOC2/
+persistence question (see "Remaining open question" near the end) is being resolved by letting
+Reddit's own app review surface it, consistent with how every other ambiguous rule in this project
+has been handled.
 
-## Why a Discord webhook, not a self-hosted endpoint
+## Why this version exists
 
-v3 built `webhook_receiver.py`: a FastAPI server on the VPS, behind nginx/TLS,
-on a real registered domain (`verify.verificationforyou.com`). It worked —
-tested end-to-end from the public internet. Then Reddit's own HTTP Fetch
-Policy documentation surfaced the actual rule for domain approval:
+Devvit Rules' "Guidelines for external services for account linking" require SOC2 Type II compliance
+and a recent third-party penetration test for any "external service connecting Reddit user data to
+external account data." A self-hosted VPS has no realistic path to that certification. Every prior
+version of this pivot (v1-v4) assumed *some* persistent storage on the VPS (`verify.db`), which keeps
+this requirement in play regardless of how anonymized or minimized the stored data is -- the
+requirement is about the service's compliance posture, not the sensitivity of what it stores.
 
-> **Personal domains** (e.g., personaldomain.com) — **Will not be approved.**
+v5's approach: **remove persistent storage entirely.** The VPS process never writes Reddit-linked data
+to disk -- purely transient, in-memory handling during the few minutes a verification is actually in
+flight. This is the strongest defensible position found in this process, though not a Reddit-confirmed
+fix (see open question at the end).
 
-That's categorical, not "pending" or "usually." The domain-allowlist request
-for `verify.verificationforyou.com` was never going to clear — it was headed
-for denial, not approval, no matter how long it waited. Continuing to build
-around a custom VPS domain was a dead end.
+## The key insight: nothing was actually being stored for its own sake
 
-The same policy page lists a **global fetch allowlist** — domains any app can
-call with zero review, because Reddit has already vetted them. `discord.com`
-is on that list. So instead of the Devvit app calling our own server, it POSTs
-directly to a **Discord Incoming Webhook**, and `discord_bot.py` — already
-holding an open gateway connection to Discord — reads that channel directly
-and writes into `verify.db` itself. No HTTP server, no domain, no nginx, no
-TLS cert, no review queue for this leg at all.
+| What v1-v4 stored in `verify.db` | Where it lives in v5 |
+|---|---|
+| "This Discord user is verified" | **Discord's own role membership** -- already the durable record. |
+| "This Reddit account has already been used to verify" (anti-duplicate) | **Devvit's own Redis/KV store** (`redis.set` with an expiration), keyed `reddit_username -> discord_user_id`. Never touches the VPS. |
+| "Code X maps to Discord user Y, awaiting a Devvit verdict" | **In-memory only** -- `SESSIONS`/`CODE_TO_USER` dicts inside the running `discord_bot.py` process. Never written to disk. |
+| "Who verified as whom" (audit/mod visibility) | **The verification-log channel's own message history.** |
+| Username-mismatch retry count | **In-memory**, part of the same `SESSIONS` entry. Resets if the bot restarts mid-flow -- accepted, not a bug (see below). |
 
-## What's still true from earlier versions
+## The problem the first draft of this spec missed
 
-The Reddit-side identity/karma/threshold logic is unaffected by this change —
-only the *transport* for the verdict hand-off changed. Confirmed via a live
-spike (`devvit new`, `devvit login`, `devvit playtest`, real form submission,
-real API calls) before any of this was built:
+v4's actual flow has **no claimed-username step at all**: `reddit.getCurrentUsername()` resolves
+identity for free from Reddit's own session context the moment the user opens the post. An earlier
+draft of this document described a `username_match` field and a "3-attempt mismatch retry" as if that
+comparison already existed -- it didn't. That language was inherited from a much older (v1-v2,
+PRAW-era) design and never reconciled against what v4 actually built.
 
-1. **The scaffold Devvit ships today is "Devvit Web"**, not Blocks/forms:
-   React 19 + Tailwind (client), Hono + tRPC (server), Node v22 serverless.
-   Its own `AGENTS.md` warns against `@devvit/public-api`/Blocks code found
-   elsewhere. A plain React `<form>` posting to our own tRPC mutation is what
-   this app actually uses — not Devvit's native `forms`/`showForm` mechanism.
-2. **The real, confirmed API surface** (all from `@devvit/reddit`, re-exported
-   via `@devvit/web/server`):
-   - `reddit.getCurrentUsername(): Promise<string | undefined>` — resolves
-     the submitting user's identity, no separate auth step.
-   - `reddit.getUserByUsername(username): Promise<User | undefined>` —
-     `undefined` rather than a throw for suspended/deleted/nonexistent accounts.
-   - `User.createdAt: Date`, `User.linkKarma: number`, `User.commentKarma: number`.
-   - `User.getComments(opts)` / `User.getPosts(opts)` — `{sort, timeframe,
-     limit, pageSize}`, `.all()` to materialize. Each result has
-     `.subredditName` and `.score` — filtering/summing is done in our code
-     (`devvit/src/server/core/verify.ts`), same shape as `reddit_poller.py`'s
-     old PRAW loop, different client.
-   - `User.getUserKarmaFromCurrentSubreddit()` — purpose-built subreddit-karma
-     endpoint, requires moderator status *unless* the target user is the
-     querier themself. Implemented and callable, but not wired into
-     `evaluate()`'s actual decision (which uses the manually-summed karma from
-     `getComments`/`getPosts` instead) — see "Still open" below for why.
-   - `context.subredditName`, `context.username` — directly on the shared
-     `context` object.
-3. **Real timings** (spike, single account): `getCurrentUsername` 125ms,
-   `getUserByUsername` 114ms, comments+posts fetch 187ms,
-   `getUserKarmaFromCurrentSubreddit` 203ms, **total 629ms** — comfortably
-   inside any serverless execution window.
-4. **Confirmed live against a real Discord server** (not just the spike):
-   the bot's own role had **no channel-specific permission overwrite at all**
-   in `#verify-here`, inheriting `@everyone`'s deny on `send_messages`; and
-   Discord's newer, separate **Pin Messages** permission (distinct from the
-   older "Manage Messages") was also needed for `msg.pin()`. Both are one-time
-   Discord-side configuration, not code bugs.
+Colby's requirement, once that was caught: **the Discord bot needs to hold the Reddit username itself**
+(so it can show the right `u/name` in DMs and the log channel), but **Devvit must never send the
+resolved username back to Discord in plaintext** -- only a boolean confirmation. That meant building
+a real claim/match step, not just renaming a field:
 
-## New user-facing flow
+1. The bot asks the user, via DM, which Reddit account is theirs (a real question now, not assumed).
+2. The user's answer is normalized (`normalize_username()`, strips `u/`/`/u/`, lowercases, validates
+   against Reddit's username character rules) and held in memory as `claimed_username`.
+3. That claim has to reach Devvit somehow, but there's no channel for Discord-side data to reach the
+   Devvit app except through the one field the user manually pastes into the Reddit post. So the code
+   DMed to the user isn't a bare 6-character string anymore -- it's `{short_id}.{encoded blob}`, where
+   the blob is `{"u": claimed_username, "d": discord_user_id}`, packed (not encrypted -- packed, same
+   trust level as the plaintext DM it came from) via URL-safe base64. `decodeClaim()` on the Devvit
+   side unpacks it locally.
+4. Devvit compares the unpacked claim against `reddit.getCurrentUsername()` and replies with **only**
+   `username_ok: true/false` -- the resolved username itself never appears in the webhook payload
+   (`VerdictPayload` in `webhook.ts`/`verdict.py` has no `reddit_username` field at all).
+5. The Discord bot already has the claimed username from step 2, so it uses that for DMs/log entries.
+   It never needs Devvit to hand back the "real" one -- it only needs Devvit's yes/no.
 
-1. User joins Discord → lands in `#verify-here` → clicks **"Verify Reddit
-   Account"**.
-2. `discord_bot.py` generates a code and DMs the user the pinned **"Verify for
-   Discord"** post's permalink plus the code as plain text.
-3. User opens the post, pastes the code into the on-page form, hits **Verify**.
-4. The `verify.submit` tRPC mutation runs server-side, already knowing who
-   submitted it. It computes metrics, evaluates thresholds, and POSTs the
-   verdict to a Discord Incoming Webhook.
-5. `discord_bot.py`'s `on_message` handler reads that channel, validates the
-   message actually came from the webhook it created (`message.webhook_id`),
-   parses the JSON verdict out of `message.content`, and calls
-   `verdict.process_verdict()` — same DB semantics `webhook_receiver.py` used
-   to have (idempotency, expiry, username-conflict handling), just a plain
-   function call instead of an HTTP round-trip, since both now run in the
-   same process against the same `verify.db`.
-6. `discord_bot.py`'s existing poll loop picks up the resolved row — role
-   assignment, pass/fail DM, and the verification-log-channel feature —
-   unchanged from every prior version.
+Confirmed with Colby before building: the code the user copies is visibly longer/uglier now (e.g.
+`X7K2Q9.eyJ1IjoidGhyb3...`) but is still a single copy-paste, no new steps added to the user's flow.
 
-## Architecture (as-built)
+## Updated architecture
 
 ```
-+---------------------------------+   HTTPS POST    +----------------------------------+
-|  devvit/ (Reddit-hosted,        | --------------->|  discord.com                      |
-|  Devvit Web: React+Hono+tRPC)   |  Incoming        |  (Incoming Webhook -- globally    |
-|                                  |  Webhook         |  pre-allowed, no Reddit review)   |
-|  - Pinned "Verify for Discord"  |                  +----------------------------------+
-|    custom post (splash.tsx)     |                                    |
-|  - React form: code field       |                                    | posts a message
-|  - trpc verify.submit mutation  |                                    v
-|    (src/server/trpc.ts):        |                  +----------------------------------+
-|    reddit.getCurrentUsername()  |                  |  discord_bot.py (VPS)             |
-|    -> computeMetrics() ->       |                  |  - already holds the gateway      |
-|    evaluate() -> postVerdict()  |                  |    connection, ensure_relay_webhook|
-+---------------------------------+                  |    creates/finds the webhook       |
-                                                       |  - on_message(): validate          |
-                                                       |    webhook_id, json.loads(content),|
-                                                       |    verdict.process_verdict()       |
-                                                       |    -> writes verify.db directly    |
-                                                       |    (no HTTP hop -- same process)   |
-                                                       |  - existing poll loop picks up the |
-                                                       |    row: role/DM/log embed          |
-                                                       +----------------------------------+
++---------------------------+   HTTPS POST     +----------------------------------+
+|  Devvit app (Reddit-      | ---------------->|  Discord's own webhook endpoint   |
+|  hosted, TypeScript)      |  discord.com      |  -> posts into                    |
+|                           |  (globally        |  verification-log channel         |
+|  - decodeClaim() unpacks  |  allow-listed)    +----------------------------------+
+|    {claimed_username,                                          |
+|    discord_user_id} from                                       v
+|    the pasted code                                 discord_bot.py:
+|  - Resolves real identity                           - looks up short_id against
+|    via reddit.getCurrent-                             SESSIONS/CODE_TO_USER
+|    Username(), compares                              (in-memory, no disk write)
+|  - Dedup check/write via                            - grants/denies role based on
+|    Devvit's own Redis                                 status + username_ok
+|    (never touches the VPS)                          - posts the result (using its
+|  - Runs threshold checks                              OWN claimed_username, never
+|  - POSTs {code, status,                               a username from Devvit) to
+|    username_ok, metrics}                              the log channel
++---------------------------+                          - NOTHING persisted to a
+                                                          database anywhere on the VPS
 ```
 
-Files: `devvit/src/server/core/verify.ts` (metrics + threshold evaluation),
-`devvit/src/server/core/webhook.ts` (POST to the Discord webhook),
-`devvit/src/server/trpc.ts` (`verify.submit` mutation), `devvit/src/client/splash.tsx`
-(the form UI), `devvit/src/server/core/post.ts` + `routes/triggers.ts` (pinned
-post on install); `verdict.py` (verdict validation + DB write, shared logic),
-`discord_bot.py` (relay webhook creation + `on_message` handler + the
-pre-existing role/DM/log-embed poll loop, unchanged).
+No `verify.db`. No SQLite file at all. The VPS holds zero Reddit-linked data at rest, at any point.
 
-No scheduler, no cron, no inbox reading, no HTTP server, no domain, no nginx,
-no TLS cert. Purely event-driven, entirely within Discord's and Devvit's own
-infrastructure plus one VPS process.
+## What `discord_bot.py` actually does now, end to end
 
-## Prerequisites
+1. User clicks Verify. If they already hold the Verified role (checked live against their Discord
+   roles, not a DB flag), tell them so and stop.
+2. Bot DMs asking which Reddit account is theirs. Session enters `SESSIONS[discord_user_id] =
+   {"stage": "awaiting_username", ...}`.
+3. User replies in DM -> `normalize_username()` validates it. Invalid input gets a plain-language
+   retry prompt (no code issued yet).
+4. Once a username normalizes, the bot generates a `short_id`, builds the compound code (step 3 in
+   the "problem" section above), stores `{stage: "awaiting_verdict", claimed_username, short_id,
+   mismatch_count: 0, updated_at}` in `SESSIONS`, indexes `CODE_TO_USER[short_id] = discord_user_id`,
+   and DMs the code + link.
+5. User completes the Devvit form -> Devvit decodes the claim, resolves real identity, compares,
+   checks/writes its own Redis dedup entry, runs thresholds, POSTs `{code: short_id, status,
+   username_ok, fail_reason, metrics...}` to the Discord webhook.
+6. `discord_bot.py`'s webhook listener (`handle_verdict`) looks up `short_id` in `CODE_TO_USER` (not a
+   DB query):
+   - **Not found** (expired, already resolved, or bot restarted mid-flow): log a bare `short_id` +
+     "discarding" line -- no username, no Discord ID -- and take no action. This is the natural
+     idempotency guard in a stateless design. The fallback if a user reports "I verified and got
+     nothing" is a mod manually granting the role -- a plain Discord action, no tooling needed.
+   - **Found, `username_ok == false`**: increment `mismatch_count`. Below 3, re-prompt for the
+     username (back to `awaiting_username`, same session). At 3, post a "couldn't confirm after 3
+     tries" flag to the mod-review channel and tell the user directly, then drop the session.
+   - **Found, `username_ok == true`**: consume the session, then behave exactly like v4's pass/fail
+     handling (grant/deny role, DM, log-channel post, soft-fail mod flag for `no_visible_activity`) --
+     just reading from the verdict payload + the session's own `claimed_username` instead of a DB row.
+7. A background sweep (`sweep_stale_sessions`, replacing the old DB-polling loop entirely -- verdicts
+   are now handled the instant the webhook delivers them, nothing to poll for) drops any session older
+   than `CODE_EXPIRY_MINUTES` so abandoned attempts don't accumulate in memory.
 
-1. Terms & Conditions and Privacy Policy links, set on Reddit's developer
-   settings page — required before `devvit publish` will run at all for any
-   app using the `http` plugin, **even one only calling a globally-allowed
-   domain**. See `docs/terms.html`/`docs/privacy.html` (GitHub Pages, on `main`).
-2. A hidden, bot-only Discord channel (deny `@everyone` View Channel) for
-   `discord_bot.py` to create the relay webhook on. `VERIFY_RELAY_CHANNEL_ID`
-   in `.env`.
-3. The bot needs `Manage Webhooks` in that channel, and `Send Messages` +
-   `Pin Messages` + `Embed Links` explicitly granted on its own role in
-   `#verify-here` (see "confirmed live" gotchas above — neither is inherited
-   by default).
-4. **"Creates custom posts" app review — still required, still no stated
-   turnaround.** Unaffected by this pivot: `devvit publish` is gated by human
-   review for any app that creates custom posts (this one does — the pinned
-   post), regardless of what domains it fetches. Submitted, pending, as of
-   this writing.
-5. ~~Domain name pointed at the VPS IP~~ / ~~TLS certificate~~ / ~~nginx
-   reverse proxy~~ / ~~Domain allowlist review~~ — **no longer needed.**
-   `discord.com` is globally pre-allowed; there is no domain-specific review
-   at all for this design. (v3's now-removed `deploy/nginx-verify.conf.example`
-   and the `verify.verificationforyou.com` DNS/cert setup are dead weight —
-   safe to tear down, not required for anything in the current design.)
+## Restart/recovery behavior (deliberately not engineered around)
 
-## `verdict.py` (VPS side, called directly by `discord_bot.py`)
+A bot restart mid-flow drops any in-flight session, resetting `mismatch_count` to zero and losing any
+issued-but-unsubmitted code. Both are accepted, not bugs:
+- Mismatch-count reset is harmless -- restarts are rare, admin-triggered events, not something a user
+  can invoke themselves.
+- A dropped in-flight code behaves identically to that code expiring on its own; the user's only
+  recourse either way is clicking Verify again. No reconnect/resume logic was built for this.
 
-Same validation/DB logic `webhook_receiver.py` had, minus the HTTP layer
-(no auth header to check — see "Auth model" below for what replaced it):
+## Anti-duplicate KV write timing
 
-1. Validate the payload shape (`pydantic`, same fields as before).
-2. Look up the pending row by `code`; raise if missing/already-resolved
-   (idempotency).
-3. Raise if the code has expired since being issued (marks it
-   `failed`/`code_expired` first).
-4. If `status == "verified"` and the username is already claimed by a
-   different *verified* row, raise and record this attempt as
-   `failed`/`reddit_account_already_linked` rather than silently dropping it.
-5. Write the verdict via `db.set_result()`, leaving `logged_to_discord = 0`
-   for the existing poll loop to pick up.
+Devvit's Redis dedup entry (`recordDedupLink` in `verify.ts`) is written whenever `username_ok` is
+true, **regardless of whether thresholds subsequently pass or fail** -- not on overall pass/fail. The
+dedup check exists to stop one real Reddit account from linking to multiple Discord accounts, which is
+a property of *confirmed identity*, not of *current karma*. A user who fails the username check gets
+the 3-attempt retry before mod review, same as above -- never penalized in the dedup store for a typo.
+The KV key is `reddit_username -> discord_user_id` (not a bare boolean), so the *same* Discord account
+can retry later once their account improves without being misread as a duplicate-account attempt.
+**This nuance (same-account retries staying unblocked) needs to be validated against real accounts in
+the dev subreddit before being treated as fully settled** -- flagged by Colby as something to confirm
+empirically once the app is playtested, not just correct on paper. Devvit's KV scope (per-app vs.
+per-subreddit-install) is likewise something to confirm empirically during that same testing pass
+rather than assumed.
 
-**Auth model, changed from v3:** there's no separate shared secret anymore.
-The Discord webhook URL itself is the credential (same as v3's secret header,
-just embedded in the URL rather than a separate value) — kept as the Devvit
-app's only setting, `webhookUrl`, marked `isSecret: true`. `discord_bot.py`
-additionally checks `message.webhook_id` matches the specific webhook it
-created, so a message dropped into the relay channel by anything else is
-ignored even before the JSON parse.
+## Unverified role handoff (new functional fix, not present in any prior version)
 
-**Tested** exactly as v3's `webhook_receiver.py` was, adapted for the new
-call shape: unknown/expired/double-submitted code rejected, username conflict
-rejected (and recorded, not lost), valid verdict written correctly with all
-metric columns populated and `logged_to_discord` left at 0 — all against a
-real `verify.db`, not mocks. Also ran a full simulated pipeline (Devvit's
-exact `{content: JSON.stringify(payload)}` POST body → simulated
-`message.content` → `json.loads` → `verdict.process_verdict()`) confirming
-the whole chain works at the code level.
+Discord's own member-join flow auto-applies an "Unverified" role to everyone who joins the server. No
+prior version of this bot (v1-v4) ever removed that role on a pass -- verified users were accumulating
+both roles simultaneously, an unnoticed gap, not intentional design. v5 adds `UNVERIFIED_ROLE_ID`
+(parallel to `VERIFIED_ROLE_ID`); on a genuine pass, `handle_result()` calls both `add_roles(verified)`
+and `remove_roles(unverified)`, wrapped in the same permission-aware try/except pattern used elsewhere
+in this bot.
 
-**A real, pre-existing bug was found and fixed while building this (see
-`db.py`, backported independently to `main`/`channelLogging` too, not
-specific to this pivot):** `UNIQUE(reddit_username)` was a table-wide column
-constraint, but `is_reddit_username_taken()` only checks `status='verified'`
-rows — so writing a second `failed` row for a username verified elsewhere (a
-normal retry case) raised `sqlite3.IntegrityError`. Fixed with a partial
-unique index scoped to `status='verified'`, with a migration that rebuilds
-any pre-existing `verify.db` in place.
+## Unlink / disconnect
 
-## The Devvit app (Reddit side) — `devvit/`
+A real, shippable feature in v5 -- no prior version had an unlink command at all. Implemented as a
+`/unlink` slash command (self-service only for now; a mod-triggered variant wasn't requested):
+- Removes the Verified role, re-adds the Unverified role (same pairing as the pass handoff), confirms
+  via an ephemeral reply. That's the entire user-facing action -- nothing else to do, because nothing
+  else was ever stored.
+- The Devvit-side dedup entry is **not** cleared on demand -- it simply expires on its own TTL (30
+  days, chosen to match the "delete within 30 days" framing used elsewhere in this project), via
+  Redis's own `expiration` option on `set()`. This sidesteps the inbound-callback problem entirely:
+  `discord_bot.py` never needs to reach into the Devvit app at all.
+- Practical effect: since the KV key is `reddit_account -> discord_user_id`, a user who unlinks and
+  re-verifies under the *same* Discord account is never blocked -- it's recognized as a refresh, not a
+  duplicate. The 30-day wait only applies to moving that Reddit account to a *different* Discord
+  account. Deliberate tradeoff: instant self-service unlink/reverify for the common case, throttled
+  only for the actual abuse case (account-hopping one Reddit account across Discord identities).
+- Nothing to delete on the VPS either way -- "delete within 30 days" is satisfied by construction.
 
-**`devvit.json`**: `permissions.reddit {enable: true, scope: "moderator"}`,
-`permissions.http {enable: true, domains: ["discord.com"]}`, a single
-`settings.global.webhookUrl` (`isSecret: true` — no separate secret setting
-anymore), and the four `min*` threshold settings. `triggers.onAppInstall`
-creates the pinned post automatically on install; a moderator-only menu item
-recreates it on demand.
+## Log-scope compliance boundary
 
-**The post:** a single inline custom post (`splash.tsx`) titled "Verify for
-Discord" — plain React, code input + Verify button.
+The SOC2/persistence rule targets a service connecting *authoritative Reddit-platform data* to an
+external account. A claimed username typed into a Discord DM is not Reddit data -- it's arbitrary
+Discord message content, no different in kind from anything else a user types into the bot, until
+Devvit resolves and confirms it against the real account. Likewise, the verdict Devvit POSTs back
+(`status`, `username_ok`) is a derived boolean signal, never the resolved username itself. Logging
+either of those on the Discord side, into Discord-owned infrastructure (stdout a mod reads, or the
+log channel), stays within Discord's own data boundary and doesn't reintroduce the persistent-storage
+problem v5 exists to eliminate.
 
-**`verify.submit` tRPC mutation** (`devvit/src/server/trpc.ts`):
-1. `reddit.getCurrentUsername()` → friendly bail-out if unresolved.
-2. `computeMetrics()` (`core/verify.ts`) → account age, total karma,
-   subreddit activity count + karma. `null` if `getUserByUsername` can't
-   find the account.
-3. `getThresholds()` reads the four settings (falling back to PLAN.md §4
-   defaults if unset); `evaluate()` applies the same pass/fail + soft-fail
-   logic `reddit_poller.py` used to (zero subreddit activity on an
-   old-enough account → `no_visible_activity` soft fail, PLAN.md §11).
-4. `postVerdict()` (`core/webhook.ts`) POSTs `{content: JSON.stringify(payload)}`
-   to the Discord webhook URL. Failure is caught and surfaced as a friendly
-   in-app message.
+One concrete consequence of this, applied during implementation: `on_message`'s JSON-parse-failure log
+line never prints `message.content` (the raw, untrusted relay payload) -- only a bare notice that
+parsing failed, so a malformed payload can't leak a claimed username into journald. Journald retention
+hardening (`SystemMaxUse=`/`MaxRetentionSec=`) remains a reasonable future improvement, not a blocker.
 
-**Section 11 (hidden/curated profile) mitigation: confirmed working, live.**
-A test account with 1 post + 2 comments hidden from its public profile via
-Reddit's "Curate your profile" setting still had all 3 correctly detected
-(`subreddit_activity_count: 3`, `subreddit_karma: 3` — an exact match) by
-`computeMetrics()` in the real dev-subreddit run. The moderator-scope
-`reddit` permission does what PLAN.md §11 hoped it would — a legitimate
-member with a curated profile won't be wrongly soft-failed as
-`no_visible_activity`.
+## What the log channel needs to support, now that it's the sole record
 
-## `discord_bot.py` changes
+Since the verification-log channel is now the only place "who's linked to whom" is visible at all:
+- Every resolved verification (pass or fail) still gets logged, per the earlier decision to log
+  everything including fails.
+- The claimed username is shown exactly as before -- it's Discord's own data, sourced from the
+  session, never from Devvit.
+- Colby has already created the channel and set its permissions (confirmed separately from this doc).
 
-- **New**, replacing `webhook_receiver.py` entirely: `ensure_relay_webhook()`
-  (finds or creates the Discord webhook on `VERIFY_RELAY_CHANNEL_ID`, logs
-  only its ID -- never the URL, a live credential that shouldn't sit in
-  persistent journal history even though reading it directly needs sudo)
-  and an `on_message` handler that validates, parses, and calls
-  `verdict.process_verdict()` directly. `get_relay_webhook_url.py` is a
-  separate one-off script for retrieving the URL on demand, printing straight
-  to the terminal it's run from rather than any persistent log -- this
-  replaced an earlier version that logged the full URL on every restart.
-- `intents.message_content = True` added — needed to read the relay
-  webhook's message content. (A privileged intent; toggle it in the Discord
-  Developer Portal same as the existing Members intent.)
-- The role/DM/log-embed poll loop logic itself is unchanged — still consumes
-  `verifications` rows the same way regardless of how they got populated.
-  What *did* change post-launch (below) is presentation, not logic.
+## What stays the same from prior versions
 
-## Post-launch polish: embeds everywhere, loosened thresholds
+- Discord webhook as transport, `webhook_id` authenticity check.
+- Role assignment logic, mod-review routing for soft-fails -- unchanged.
+- Explicit opt-in consent prompt on the Devvit form -- unchanged.
 
-Once the pipeline was confirmed working live, real usage surfaced formatting
-and threshold issues worth fixing before calling this done:
+## What got deleted from the codebase entirely
 
-- **Thresholds loosened** from the original PLAN.md §4 starting values
-  (100 total karma / 5 subreddit activity / 20 subreddit karma) down to
-  50 / 1 / 50 — the originals proved unnecessarily strict once tested
-  against a real account. Account age (30 days) unchanged. These are Devvit
-  app settings (`devvit settings set minTotalKarma` etc.); the VPS `.env`'s
-  matching `MIN_*` vars must be updated by hand too (log-embed text only).
-- **One consistent requirements-checklist style, shared everywhere**: the
-  `#verify-here` pinned message, both pass/fail DMs, the verification-log
-  channel embed, and — new — the Devvit post's own result card all render
-  the same ✅/❌-per-requirement checklist now, instead of three or four
-  different ad-hoc formats. `discord_bot.py`'s `_requirement_lines()` is the
-  shared Python-side helper; `verify.submit` now returns `metrics` +
-  `thresholds` alongside `message` so `splash.tsx` can render the matching
-  checklist client-side.
-- **The initial "here's your code" DM became an embed** with the code in a
-  fenced code block (one-tap-to-copy on both desktop and mobile, unlike
-  backticks buried in a sentence) and a real link-style button
-  ("Open Verification Post") instead of a bare pasted URL.
-- **Devvit post UI cleanup**: removed a leftover "Docs" footer link
-  (scaffold boilerplate pointing at Devvit's own developer docs, irrelevant
-  to end users) and fixed a dark-mode bug where the code input's text was
-  hardcoded black (`text-black`) while its background followed the system
-  theme — invisible on a dark background. Now explicit light/dark colors,
-  same pattern as the rest of the page.
-- **Known, accepted tradeoff from the Discord-webhook design**: a
-  double-submitted code no longer gets accurate real-time feedback on the
-  Reddit side. `postVerdict()` only knows whether *Discord* accepted the
-  webhook POST, not whether `verdict.process_verdict()` downstream accepted
-  or rejected it as a duplicate — so a second submission of an
-  already-resolved code shows "Submitted!" same as the first, even though
-  nothing changed in the DB and no second DM follows. Minor (only matters on
-  a fast double-click), not fixed — v3's design could propagate that
-  rejection accurately since it was a direct HTTP round-trip; this is the
-  price of posting to Discord's endpoint instead of our own.
+- `db.py` and its entire schema.
+- `verify.db` (and all migration scripts written for it across v1-v4).
+- Any `chmod 600`/permissions concerns specific to the database file -- moot, there's no file.
+- `verdict.py`'s DB-writing role -- it's now pure payload validation (`VerdictPayload`/`parse_verdict`),
+  no `db` import at all.
+- The DB-polling `process_results` background loop -- verdicts are now handled the instant the relay
+  webhook delivers them; the only remaining background task is the in-memory session sweep.
 
-## What stayed the same across all versions
+## Remaining open question -- resolved via design, not outreach
 
-- `db.py` schema and all its functions.
-- Code generation, expiry, one-account-per-user enforcement.
-- Verification-log-channel feature (format evolved post-launch, see above;
-  the underlying mechanism — poll loop, `logged_to_discord` flag — didn't).
-
-## What's retired
-
-- `reddit_poller.py`, `praw`/`prawcore`, all `REDDIT_CLIENT_ID`/`SECRET`/
-  `USERNAME`/`PASSWORD`/`USER_AGENT` env vars — parked on the `channelLogging`
-  branch's history (pre-Devvit-pivot) if ever revived, not present on `main`.
-- **`webhook_receiver.py`, `fastapi`/`uvicorn`, `deploy/webhook_receiver.service`,
-  `deploy/nginx-verify.conf.example`, `DEVVIT_WEBHOOK_SECRET`, `WEBHOOK_PORT`** —
-  the entire v3 self-hosted-endpoint design, replaced by the Discord webhook
-  relay. The domain/TLS/nginx setup already done on the VPS is now unused
-  dead weight, not a dependency of anything current.
+The inbound-callback question is moot (TTL expiry replaces the need for a callback entirely, see
+"Unlink" above). The SOC2/persistence question remains genuinely unresolved in the abstract -- no
+public documentation reviewed in this process states definitively whether a fully stateless,
+non-persisting service falls outside the "external service connecting Reddit user data to external
+account data" trigger. Per Colby's decision, this isn't being escalated to Reddit directly; v5's
+design is the strongest, most defensible position achievable through architecture alone, and Reddit's
+own app review process is what will surface whether this specific point needs further changes.
 
 ## Explicitly out of scope for this pass
 
-- Migrating `discord_bot.py` to Devvit — not applicable, same reasoning as
-  every prior version.
-- The classic PRAW script-app path — parked, not abandoned.
-- Any per-user dynamic post creation — "Verify for Discord" is a single
-  static pinned post.
-- Adopting `getUserKarmaFromCurrentSubreddit()` as the subreddit-karma source
-  of truth — implemented and confirmed callable, but the self-user-exception
-  nuance (does it actually require moderator status for someone *other* than
-  the querier, or would our always-self-query usage never actually exercise
-  that gate at all?) is still unresolved.
-
-## Testing notes — what's done, what's left
-
-Done:
-- Full Reddit-side chain confirmed live against a real account, twice (spike
-  + real dev-subreddit run): identity resolution, karma/history pull,
-  threshold evaluation.
-- `npx tsc --build`, `npm run lint`, `npx vitest run`, `npm run build` all
-  pass on `devvit/` after the webhook-relay changes.
-- `verdict.py` tested directly (not via HTTP): all the same scenarios v3's
-  `webhook_receiver.py` covered, plus a full simulated pipeline matching
-  Devvit's exact POST body shape.
-- `discord_bot.py` connected to the real Discord server, posted/pinned the
-  Verify message (after fixing the two real permission gaps noted above).
-- `db.py`'s `IntegrityError` fix, independently verified and backported to
-  `main`/`channelLogging`.
-- v3's self-hosted webhook (domain + TLS + nginx + `webhook_receiver.py`) was
-  fully built and confirmed working end-to-end from the public internet
-  before being retired — not abandoned due to a bug, but due to Reddit's
-  policy on personal domains making it a dead end regardless of how well it
-  worked.
-- **The Discord-webhook relay ran live, start to finish, for real.** Clicked
-  Verify in Discord → DM → dev-subreddit post → submitted → Devvit's
-  `postVerdict()` POSTed to the real Discord webhook → `discord_bot.py`'s
-  `on_message` handler received it (`relay: processed verdict for code
-  'SSMFBU'`) → the existing poll loop picked up the row and sent the correct
-  fail DM (`subreddit_activity:1<5;subreddit_karma:1<20` — an empty dev
-  subreddit correctly failing, not a bug) → the verification-log-channel
-  embed posted. Two real, live bugs found and fixed along the way, both
-  Discord-permission issues rather than logic bugs:
-  - Discord rejects webhook names containing the substring "discord"
-    (anti-impersonation rule) — `RELAY_WEBHOOK_NAME` renamed.
-  - Python block-buffers `print()` under systemd (stdout isn't a tty), so
-    our own log lines — including the relay webhook's URL — were silently
-    getting lost on process restarts, while `discord.py`'s own
-    `logging`-module output kept showing up fine. Fixed with
-    `Environment=PYTHONUNBUFFERED=1` in `discord_bot.service`. This means
-    some of the earlier "silent failures" during this debugging session may
-    have been silently-lost successes, not actual errors — worth remembering
-    if something seems to work differently than an old log suggested.
-  - (Also needed, same category as the earlier `#verify-here` fixes: the
-    verification-log channel needed its own explicit `Send Messages`/`Embed
-    Links` overwrite for the bot's role — nothing is inherited by default.)
-  - The temporary metrics-logging line added to `trpc.ts` to work around the
-    domain block has been removed now that the real path works.
-- **Section 11 curated-profile visibility, confirmed** (PLAN.md §10 item 6) —
-  see above. A test account's hidden posts/comments were correctly detected
-  by the moderator-scope app, exact match on count and karma.
-
-Still open:
-- **"Creates custom posts" app review** — no stated turnaround, blocks
-  `devvit install` on the real subreddit (`Drueandgabe`), which blocks
-  getting the real `DEVVIT_POST_URL`.
-- The `getUserKarmaFromCurrentSubreddit()` self-user-exception nuance
-  (PLAN.md §10 item 7) — likely moot given it's not wired into `evaluate()`,
-  but not formally closed out.
+- Any change to the classic-PRAW-path decision -- still parked on the `channelLogging` branch.
+- The custom-domain approach -- still superseded by the Discord-webhook design.
+- No outreach to Reddit/Devvit support planned before resubmission.

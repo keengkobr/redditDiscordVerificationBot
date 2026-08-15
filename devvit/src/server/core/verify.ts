@@ -1,4 +1,4 @@
-import { context, reddit, settings } from '@devvit/web/server';
+import { context, reddit, redis, settings } from '@devvit/web/server';
 
 /**
  * Replaces reddit_poller.py's check_thresholds() (DEVVIT_PIVOT_SPEC.md). Runs
@@ -6,6 +6,72 @@ import { context, reddit, settings } from '@devvit/web/server';
  * identity is already known via reddit.getCurrentUsername() -- no inbox, no
  * polling, no separate identity step.
  */
+
+/**
+ * How long the anti-duplicate KV entry (see recordDedupLink below) lives
+ * before a Reddit account can be linked to a *different* Discord account
+ * again. Re-verifying under the *same* Discord account is never blocked by
+ * this (DEVVIT_PIVOT_SPEC.md v5's unlink section).
+ */
+const DEDUP_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+function dedupKey(username: string): string {
+  return `dedup:${username}`;
+}
+
+/** Strips an optional u/ or /u/ prefix and lowercases -- mirrors
+ * discord_bot.py's normalize_username() so both sides agree on equality. */
+export function normalizeUsername(raw: string): string {
+  let candidate = raw.trim();
+  if (candidate.toLowerCase().startsWith('/u/')) candidate = candidate.slice(3);
+  else if (candidate.toLowerCase().startsWith('u/')) candidate = candidate.slice(2);
+  return candidate.toLowerCase();
+}
+
+export type DecodedClaim = {
+  shortId: string;
+  claimedUsername: string;
+  discordUserId: string;
+};
+
+/**
+ * Unpacks the code discord_bot.py DMed the user. This is the *only* channel
+ * that exists for Discord-side data to reach this app at all -- Devvit can't
+ * fetch our VPS (personal domains are never approved), and there's no
+ * inbound-callback mechanism either. See DEVVIT_PIVOT_SPEC.md v5.
+ */
+export function decodeClaim(code: string): DecodedClaim | null {
+  const dot = code.indexOf('.');
+  if (dot === -1) return null;
+  const shortId = code.slice(0, dot);
+  const blobB64 = code.slice(dot + 1);
+  try {
+    const json = Buffer.from(blobB64, 'base64url').toString('utf8');
+    const obj = JSON.parse(json) as { u?: unknown; d?: unknown };
+    if (typeof obj.u !== 'string' || typeof obj.d !== 'string' || !obj.u || !obj.d) return null;
+    return { shortId, claimedUsername: normalizeUsername(obj.u), discordUserId: obj.d };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Returns the Discord user ID this Reddit account is already linked to
+ * (still within the TTL window), or null if it's free to link.
+ */
+export async function getDedupOwner(username: string): Promise<string | null> {
+  const owner = await redis.get(dedupKey(username));
+  return owner ?? null;
+}
+
+/** Writes/refreshes the dedup link. Called once identity is confirmed to
+ * match the claim (username_ok), regardless of whether thresholds pass --
+ * see DEVVIT_PIVOT_SPEC.md v5's "Anti-duplicate KV write timing" section. */
+export async function recordDedupLink(username: string, discordUserId: string): Promise<void> {
+  await redis.set(dedupKey(username), discordUserId, {
+    expiration: new Date(Date.now() + DEDUP_TTL_MS),
+  });
+}
 
 export type Metrics = {
   accountAgeDays: number;

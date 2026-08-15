@@ -6,12 +6,16 @@ Gates a Discord server behind proof of active, non-burner Reddit membership. Ful
 
 ## How it works
 
-Two pieces — one on your VPS, one hosted on Reddit's own infrastructure — talking only through a shared SQLite file (`verify.db`) and a Discord Incoming Webhook:
+Two pieces — one on your VPS, one hosted on Reddit's own infrastructure — talking only through a Discord Incoming Webhook. **There is no database anywhere in this design** — see "Why no database?" below.
 
-- **`discord_bot.py`** (VPS) — posts the pinned Verify button in `#verify-here`, DMs users a code plus a link to the Reddit verification post, polls the DB to assign the Verified role/send pass-fail DMs/post log embeds, **and** owns a hidden relay channel where it creates a Discord Incoming Webhook and reads verdicts posted to it directly (`verdict.py`).
-- **`devvit/`** (Reddit-hosted) — the pinned "Verify for Discord" post. Its form-submit handler resolves the submitting user's Reddit identity for free (no inbox, no OAuth), pulls their account age/karma/subreddit history, decides pass/fail, and POSTs the verdict to that Discord webhook.
+- **`discord_bot.py`** (VPS) — posts the pinned Verify button in `#verify-here`, DMs users asking which Reddit account is theirs, DMs a code (which carries that claim, packed, back to Devvit) plus a link to the Reddit verification post, assigns the Verified role/sends pass-fail DMs/posts log embeds the instant a verdict arrives, **and** owns a hidden relay channel where it creates a Discord Incoming Webhook and reads verdicts posted to it directly (`verdict.py`). All in-flight state lives in memory, never on disk.
+- **`devvit/`** (Reddit-hosted) — the pinned "Verify for Discord" post. Its form-submit handler unpacks the claim from the pasted code, resolves the submitting user's real Reddit identity for free (no inbox, no OAuth), confirms it matches the claim, pulls their account age/karma/subreddit history, checks/writes its own Redis anti-duplicate entry, decides pass/fail, and POSTs the verdict to that Discord webhook — **never the resolved username itself**, only a match/no-match boolean (Discord already has the claimed username from the DM).
 
 There is **no self-hosted HTTP endpoint, no custom domain, no nginx/TLS** for the verdict hand-off. Reddit's [HTTP Fetch Policy](https://developers.reddit.com/docs) is explicit that personal/custom domains are never approved — only a fixed global allowlist skips review, and `discord.com` is on it. So instead of running our own webhook receiver, the Devvit app posts straight to a Discord webhook and `discord_bot.py` — already connected to the Discord gateway — reads it.
+
+### Why no database?
+
+Devvit Rules' guidelines for external services that link a Reddit account to an external account require SOC2 Type II compliance and a recent third-party pen test — not realistic for a self-hosted VPS. So there's nothing on the VPS to certify: `discord_bot.py` holds verification state in plain in-memory dicts for the few minutes an attempt is actually in flight, and everything durable already lives somewhere that owns it natively — Discord's own role membership, Discord's own channel history, and Devvit's own Redis/KV store. Full rationale in [Claude/DEVVIT_PIVOT_SPEC.md](Claude/DEVVIT_PIVOT_SPEC.md) (v5).
 
 ## Setup
 
@@ -24,10 +28,10 @@ cp .env.example .env   # then fill in real values
 
 You'll need:
 
-1. A **Discord bot application** (Discord Developer Portal) with the bot invited to your server, `Manage Roles` + `Send Messages` + `Read Message History` + `Manage Webhooks` permissions, the **Server Members Intent**, and the **Message Content Intent** enabled (the latter is needed to read the relay webhook's messages).
+1. A **Discord bot application** (Discord Developer Portal) with the bot invited to your server, `Manage Roles` + `Send Messages` + `Read Message History` + `Manage Webhooks` permissions, the **Server Members Intent**, and the **Message Content Intent** enabled (the latter is needed to read DMs and the relay webhook's messages). Also run `applications.commands` scope on invite so `/unlink` can be registered.
 2. A **hidden, bot-only Discord channel** (deny `@everyone` View Channel) for the webhook relay — `discord_bot.py` creates the actual webhook there on first startup; you just need the channel to exist and its ID in `.env`.
 3. The **Devvit app** installed on your subreddit as a moderator (see "Devvit app" below) — moderator scope is what lets it read another user's subreddit-specific karma, and per PLAN.md Section 11 gives 28-day visibility into otherwise-hidden profile activity.
-4. IDs for your guild, `#verify-here` channel, `#verify-review` mod channel, a `#verification-log` channel, the relay channel from #2, and the "Verified" role (enable Developer Mode in Discord to copy IDs). The bot needs `Send Messages` + `Embed Links` + `Pin Messages` in `#verify-here` (Discord split pinning into its own permission, separate from "Manage Messages").
+4. IDs for your guild, `#verify-here` channel, `#verify-review` mod channel, a verification-log channel, the relay channel from #2, and the "Verified" (and optionally "Unverified") role (enable Developer Mode in Discord to copy IDs). The bot needs `Send Messages` + `Embed Links` + `Pin Messages` in `#verify-here` (Discord split pinning into its own permission, separate from "Manage Messages"), and `Send Messages` + `Embed Links` in the mod-review and log channels.
 
 Fill all of the above into `.env`.
 
@@ -37,7 +41,7 @@ Fill all of the above into `.env`.
 python3 discord_bot.py
 ```
 
-Just one process now. It calls `db.init_db()` on startup, so the schema is created (or migrated in place) automatically — no manual migration step needed. On first startup it creates the Discord relay webhook automatically, logging only its ID — the URL itself (a live credential) is deliberately never logged. To actually retrieve it (e.g. to fill in the Devvit app's `webhookUrl` setting), run `python3 get_relay_webhook_url.py` — it prints straight to your terminal, not to any persistent log.
+Just one process, no database to initialize. On first startup it creates the Discord relay webhook automatically, logging only its ID — the URL itself (a live credential) is deliberately never logged. To actually retrieve it (e.g. to fill in the Devvit app's `webhookUrl` setting), run `python3 get_relay_webhook_url.py` — it prints straight to your terminal, not to any persistent log.
 
 ## Devvit app
 
@@ -108,3 +112,7 @@ which pulls, reinstalls dependencies, and restarts the service. (This doesn't to
 ## Tuning thresholds
 
 VPS-side numbers (code expiry, cooldown) are environment variables — see `.env.example`. The actual pass/fail thresholds (account age, karma, subreddit activity) live in the Devvit app's settings (see "Devvit app" above) — change them there without touching code. Current defaults: 30+ days account age, 50+ total karma, 1+ post/comment in the subreddit, 50+ karma in the subreddit.
+
+## Unlinking
+
+Any verified member can run `/unlink` in the server to remove their Verified role and (if configured) get the Unverified role back, so they can re-verify — instantly under the same Discord account, or after the anti-duplicate entry's 30-day TTL if they're trying to move that Reddit account to a *different* Discord account.

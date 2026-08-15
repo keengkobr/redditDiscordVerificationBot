@@ -3,7 +3,15 @@ import { transformer } from '../shared/transformer';
 import { Context } from './context';
 import { context, reddit } from '@devvit/web/server';
 import { z } from 'zod';
-import { computeMetrics, evaluate, getThresholds } from './core/verify';
+import {
+  computeMetrics,
+  decodeClaim,
+  evaluate,
+  getDedupOwner,
+  getThresholds,
+  normalizeUsername,
+  recordDedupLink,
+} from './core/verify';
 import { postVerdict } from './core/webhook';
 
 /**
@@ -34,9 +42,23 @@ export const appRouter = t.router({
   verify: t.router({
     // Replaces reddit_poller.py entirely (DEVVIT_PIVOT_SPEC.md). The submitting
     // user's identity comes from context/reddit for free -- no inbox polling.
+    //
+    // v5: the pasted code carries a claimed username + Discord user ID (see
+    // decodeClaim) -- that's the only channel Discord-side data has to reach
+    // this app at all. This app never sends the *resolved* username back to
+    // Discord, only whether it matched the claim (username_ok) -- see
+    // DEVVIT_PIVOT_SPEC.md v5's "Log-scope compliance boundary" section.
     submit: publicProcedure
-      .input(z.object({ code: z.string().trim().min(1).max(32) }))
+      .input(z.object({ code: z.string().trim().min(1).max(300) }))
       .mutation(async ({ input }) => {
+        const claim = decodeClaim(input.code);
+        if (!claim) {
+          return {
+            ok: false,
+            message: "That code doesn't look right -- copy it fresh from your Discord DM and try again.",
+          };
+        }
+
         const username = await reddit.getCurrentUsername();
         if (!username) {
           console.error('[verify.submit] no username resolved from context');
@@ -46,13 +68,27 @@ export const appRouter = t.router({
           };
         }
 
+        if (normalizeUsername(username) !== claim.claimedUsername) {
+          try {
+            await postVerdict({ code: claim.shortId, status: 'failed', username_ok: false, fail_reason: null });
+          } catch (err) {
+            console.error('[verify.submit] postVerdict failed:', err);
+          }
+          return {
+            ok: false,
+            message:
+              "That doesn't match the Reddit username you gave Discord. Make sure you're logged into " +
+              'the right account, then try again from your Discord code.',
+          };
+        }
+
         const metrics = await computeMetrics(username);
         if (!metrics) {
           try {
             await postVerdict({
-              code: input.code,
-              reddit_username: username,
+              code: claim.shortId,
               status: 'failed',
+              username_ok: true,
               fail_reason: 'reddit_account_not_found',
             });
           } catch (err) {
@@ -64,14 +100,39 @@ export const appRouter = t.router({
           };
         }
 
+        // Anti-duplicate check (DEVVIT_PIVOT_SPEC.md v5): one Reddit account
+        // can't link to multiple Discord accounts within the TTL window, but
+        // re-linking to the *same* Discord account is always allowed.
+        const dedupOwner = await getDedupOwner(claim.claimedUsername);
+        if (dedupOwner && dedupOwner !== claim.discordUserId) {
+          try {
+            await postVerdict({
+              code: claim.shortId,
+              status: 'failed',
+              username_ok: true,
+              fail_reason: 'reddit_account_already_linked',
+            });
+          } catch (err) {
+            console.error('[verify.submit] postVerdict failed:', err);
+          }
+          return {
+            ok: false,
+            message: 'That Reddit account is already linked to a different Discord account.',
+          };
+        }
+
         const thresholds = await getThresholds();
         const { passed, failReason } = evaluate(metrics, thresholds);
 
+        // Written on confirmed identity regardless of pass/fail -- see
+        // DEVVIT_PIVOT_SPEC.md v5's "Anti-duplicate KV write timing" section.
+        await recordDedupLink(claim.claimedUsername, claim.discordUserId);
+
         try {
           await postVerdict({
-            code: input.code,
-            reddit_username: username,
+            code: claim.shortId,
             status: passed ? 'verified' : 'failed',
+            username_ok: true,
             fail_reason: failReason,
             account_age_days: metrics.accountAgeDays,
             total_karma: metrics.totalKarma,
