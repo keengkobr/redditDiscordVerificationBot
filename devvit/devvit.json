@@ -36,7 +36,7 @@
     "http": {
       "enable": true,
       "domains": [
-        "verify.verificationforyou.com"
+        "discord.com"
       ]
     }
   },
@@ -44,14 +44,8 @@
     "global": {
       "webhookUrl": {
         "type": "string",
-        "label": "Verification webhook URL",
-        "helpText": "The VPS webhook_receiver.py endpoint, e.g. https://verify.yourdomain.com/devvit/verdict",
-        "placeholder": "https://verify.yourdomain.com/devvit/verdict"
-      },
-      "webhookSecret": {
-        "type": "string",
-        "label": "Verification webhook shared secret",
-        "helpText": "Must match DEVVIT_WEBHOOK_SECRET in the VPS .env",
+        "label": "Discord webhook URL",
+        "helpText": "The Discord Incoming Webhook discord_bot.py creates on the relay channel -- copy it from that process's logs on first startup. This is the only credential needed now; the URL itself is the secret (personal/custom domains are never approved by Reddit's HTTP Fetch Policy, so this posts to discord.com instead of a self-hosted endpoint).",
         "isSecret": true
       },
       "minAccountAgeDays": {

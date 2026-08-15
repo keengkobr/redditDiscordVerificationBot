@@ -23,6 +23,12 @@ VERIFY_CHANNEL_ID = _get_int("VERIFY_CHANNEL_ID", 0)
 MOD_REVIEW_CHANNEL_ID = _get_int("MOD_REVIEW_CHANNEL_ID", 0)
 VERIFIED_ROLE_ID = _get_int("VERIFIED_ROLE_ID", 0)
 VERIFICATION_LOG_CHANNEL_ID = _get_int("VERIFICATION_LOG_CHANNEL_ID", 0)
+# Hidden, bot-only channel discord_bot.py posts/reads a Discord Incoming
+# Webhook on -- the Devvit app's verdict hand-off (DEVVIT_PIVOT_SPEC.md v4).
+# Reddit's HTTP Fetch Policy never approves personal domains, only a fixed
+# global allowlist (discord.com is on it) -- so this replaces the
+# self-hosted webhook_receiver.py + custom-domain design entirely.
+VERIFY_RELAY_CHANNEL_ID = _get_int("VERIFY_RELAY_CHANNEL_ID", 0)
 
 # --- Reddit ---
 # No PRAW/OAuth creds here on this branch -- DEVVIT_PIVOT_SPEC.md retires
@@ -31,10 +37,6 @@ VERIFICATION_LOG_CHANNEL_ID = _get_int("VERIFICATION_LOG_CHANNEL_ID", 0)
 # not deleted -- see main/channelLogging branches if it's ever revived.
 SUBREDDIT_NAME = os.getenv("SUBREDDIT_NAME", "")
 
-# --- Devvit webhook (DEVVIT_PIVOT_SPEC.md) ---
-# Must match the Devvit app's `webhookSecret` setting (`devvit settings set webhookSecret`).
-DEVVIT_WEBHOOK_SECRET = os.getenv("DEVVIT_WEBHOOK_SECRET", "")
-WEBHOOK_PORT = _get_int("WEBHOOK_PORT", 8000)
 # Permalink to the pinned "Verify for Discord" post -- discord_bot.py DMs this
 # instead of a prefilled-message compose URL.
 DEVVIT_POST_URL = os.getenv("DEVVIT_POST_URL", "")
@@ -60,7 +62,7 @@ CODE_COOLDOWN_SECONDS = _get_int("CODE_COOLDOWN_SECONDS", 60)
 POLL_INTERVAL_SECONDS = _get_int("POLL_INTERVAL_SECONDS", 30)
 
 
-def validate(require_discord: bool = False, require_webhook: bool = False) -> None:
+def validate(require_discord: bool = False) -> None:
     """Fail fast with a clear message instead of a confusing library traceback."""
     missing = []
     if require_discord:
@@ -70,9 +72,8 @@ def validate(require_discord: bool = False, require_webhook: bool = False) -> No
             missing.append("VERIFY_CHANNEL_ID")
         if not DEVVIT_POST_URL:
             missing.append("DEVVIT_POST_URL")
-    if require_webhook:
-        if not DEVVIT_WEBHOOK_SECRET:
-            missing.append("DEVVIT_WEBHOOK_SECRET")
+        if not VERIFY_RELAY_CHANNEL_ID:
+            missing.append("VERIFY_RELAY_CHANNEL_ID")
     if missing:
         raise SystemExit(
             f"Missing required config: {', '.join(missing)}. "

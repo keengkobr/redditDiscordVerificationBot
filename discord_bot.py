@@ -1,11 +1,20 @@
 """Process 1 (PLAN.md Section 2/3): the #verify-here channel, the Verify
 button, DMs, and role assignment. Also polls the shared DB for results the
-Reddit poller has written and acts on them (assign role / DM / mod alert).
+Devvit app's verdicts (relayed via a Discord webhook -- see the "Discord
+webhook relay" section below) have written and acts on them (assign role /
+DM / mod alert).
 
-Never talks to reddit_poller.py directly — only through verify.db.
+Since DEVVIT_PIVOT_SPEC.md v4: also owns the Discord-side half of the
+verdict hand-off. Reddit's HTTP Fetch Policy never approves personal
+domains, only a fixed global allowlist (which includes discord.com) --
+so the Devvit app POSTs its verdict to a Discord Incoming Webhook on a
+hidden relay channel instead of a self-hosted HTTP endpoint, and this
+process reads that channel directly and writes to verify.db itself
+(verdict.py) -- no separate webhook_receiver.py process needed.
 """
 
 import asyncio
+import json
 from datetime import datetime, timezone
 
 import discord
@@ -13,11 +22,18 @@ from discord.ext import commands, tasks
 
 import config
 import db
+import verdict
 
 intents = discord.Intents.default()
 intents.members = True  # needed to look up members and assign roles
+intents.message_content = True  # needed to read the relay webhook's message content
 
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+# Set once at startup by ensure_relay_webhook() -- lets on_message() confirm an
+# incoming message actually came from *our* webhook, not just any message
+# dropped into the relay channel.
+_relay_webhook_id: int | None = None
 
 VERIFY_MESSAGE = (
     "**Verify your Reddit account to unlock the rest of the server.**\n\n"
@@ -171,6 +187,72 @@ async def on_interaction(interaction: discord.Interaction) -> None:
             await interaction.message.edit(view=None)
         except discord.HTTPException:
             pass
+
+
+# ---------------------------------------------------------------------------
+# Discord webhook relay (replaces webhook_receiver.py, DEVVIT_PIVOT_SPEC.md v4)
+# ---------------------------------------------------------------------------
+
+RELAY_WEBHOOK_NAME = "Verify for Discord relay"
+
+
+async def ensure_relay_webhook() -> None:
+    """Finds or creates the Incoming Webhook the Devvit app POSTs verdicts to.
+    Only logs the full URL (which is itself the secret -- anyone with it can
+    post to this channel) the one time it's actually created; on later
+    restarts it just confirms the webhook still exists, without re-logging
+    the token into journalctl history repeatedly.
+    """
+    global _relay_webhook_id
+
+    channel = bot.get_channel(config.VERIFY_RELAY_CHANNEL_ID)
+    if not channel:
+        print("[discord_bot] VERIFY_RELAY_CHANNEL_ID not found — skipping relay webhook setup")
+        return
+
+    webhooks = await channel.webhooks()
+    existing = next((w for w in webhooks if w.name == RELAY_WEBHOOK_NAME), None)
+    if existing:
+        _relay_webhook_id = existing.id
+        print(f"[discord_bot] using existing relay webhook (id={existing.id})")
+        return
+
+    created = await channel.create_webhook(name=RELAY_WEBHOOK_NAME)
+    _relay_webhook_id = created.id
+    print(
+        "[discord_bot] created relay webhook — copy this URL into the Devvit app's "
+        f"webhookUrl setting NOW, it will not be logged again:\n{created.url}"
+    )
+
+
+@bot.event
+async def on_message(message: discord.Message) -> None:
+    # Overriding on_message on a commands.Bot normally requires calling
+    # bot.process_commands(message) to keep prefix commands working -- not
+    # needed here since this bot defines none (everything is buttons/
+    # interactions). If that changes, add the call back.
+    if message.channel.id != config.VERIFY_RELAY_CHANNEL_ID:
+        return
+    if message.webhook_id is None or message.webhook_id != _relay_webhook_id:
+        # Not from the webhook we created for this exact purpose -- ignore.
+        # (Guards against someone posting arbitrary text in the relay channel.)
+        return
+
+    try:
+        payload = json.loads(message.content)
+    except (json.JSONDecodeError, TypeError):
+        print(f"[discord_bot] relay message wasn't valid JSON: {message.content!r}")
+        return
+
+    try:
+        await run_db_verdict(payload)
+        print(f"[discord_bot] relay: processed verdict for code {payload.get('code')!r}")
+    except verdict.VerdictError as exc:
+        print(f"[discord_bot] relay: rejected verdict for code {payload.get('code')!r}: {exc}")
+
+
+async def run_db_verdict(payload: dict) -> None:
+    await asyncio.to_thread(verdict.process_verdict, payload)
 
 
 # ---------------------------------------------------------------------------
@@ -341,6 +423,7 @@ async def on_ready() -> None:
     print(f"[discord_bot] logged in as {bot.user}")
     bot.add_view(VerifyView())
     await ensure_verify_message()
+    await ensure_relay_webhook()
     if not process_results.is_running():
         process_results.start()
 

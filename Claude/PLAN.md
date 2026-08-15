@@ -90,9 +90,9 @@ CREATE INDEX idx_code ON verifications(code);
 |---|---|---|
 | Discord bot framework | discord.py (2.x) | Mature, supports buttons/views + slash commands if needed later |
 | Reddit integration | ~~PRAW~~ Devvit app (TypeScript, "Devvit Web": React + Hono + tRPC) | Reddit requires new integrations to go through Devvit — see DEVVIT_PIVOT_SPEC.md |
-| Reddit↔VPS hand-off | Webhook (`webhook_receiver.py`, FastAPI) over HTTPS, shared-secret auth | Devvit apps can't reach the VPS's SQLite file directly; this replaces inbox polling |
+| Reddit↔VPS hand-off | ~~Self-hosted webhook (`webhook_receiver.py`, FastAPI/nginx/custom domain)~~ Discord Incoming Webhook, read directly by `discord_bot.py` (`verdict.py`) | Reddit's HTTP Fetch Policy never approves personal/custom domains — only a fixed global allowlist, which includes discord.com, skips review. See DEVVIT_PIVOT_SPEC.md v4. |
 | Database | SQLite (sqlite3 / aiosqlite) | Zero-config, plenty for this scale; migrate to Postgres only if the server gets very large |
-| Hosting | Single Linux VPS (Hetzner CX22 or DigitalOcean droplet) | ~$5-6/mo, runs `discord_bot.py` + `webhook_receiver.py`; now also needs a domain + TLS (nginx/certbot) for the webhook, which v1 of this plan didn't require |
+| Hosting | Single Linux VPS (Hetzner CX22 or DigitalOcean droplet) | ~$5-6/mo, runs just `discord_bot.py` now — no domain/TLS/nginx needed, v3 of this plan's webhook design didn't survive Reddit's domain policy |
 | Process management | systemd services (or pm2/supervisord) | Auto-restart on crash/reboot |
 
 ---
@@ -103,11 +103,11 @@ CREATE INDEX idx_code ON verifications(code);
 - [x] ~~Reddit API app registration + OAuth credentials~~ Superseded: Devvit app install is immediate, no multi-week approval queue (confirmed) — see DEVVIT_PIVOT_SPEC.md
 - [x] Install the Devvit app on the subreddit with **moderator** scope (replaces "make the bot account a moderator" — same 28-day content-visibility rationale, see Section 11)
 - [x] `discord_bot.py`: `#verify-here` channel, button, DM flow, role assignment
-- [x] ~~`reddit_poller.py`: inbox polling, code matching, threshold checks~~ Retired — replaced by the Devvit app's form-submit handler + `webhook_receiver.py`
+- [x] ~~`reddit_poller.py`: inbox polling, code matching, threshold checks~~ Retired — replaced by the Devvit app's form-submit handler + a Discord webhook relay (`verdict.py`, `discord_bot.py`)
 - [x] Shared SQLite schema + one-account-per-user enforcement
 - [x] Plain-language pass/fail DMs
 - [x] Mod review channel for manual overrides (also the fallback path for hidden-profile false negatives)
-- [ ] Domain + TLS (nginx/certbot) in front of `webhook_receiver.py` — new prerequisite this pivot introduces, not needed by the original PRAW design
+- [x] ~~Domain + TLS (nginx/certbot) in front of `webhook_receiver.py`~~ Built, tested end-to-end, then retired — Reddit's HTTP Fetch Policy never approves personal domains, so this whole approach was a dead end regardless of how well it worked. Replaced by a Discord Incoming Webhook (globally pre-allowed, zero review). See DEVVIT_PIVOT_SPEC.md v4.
 
 ### Phase 2 — Role & Server Management
 - [ ] Additional self-serve roles (interest/topic roles via reaction or button menus)
@@ -150,7 +150,7 @@ CREATE INDEX idx_code ON verifications(code);
 
 ## 10. Open Decisions / Next Steps
 
-1. ~~Register the Reddit API app now~~ Superseded, but **correcting an earlier note here** — twice, in fact. The lead-time risk didn't disappear with the Devvit pivot, it split into two independent review queues: (a) the `http` domain allowlist, gated separately and reviewed per Reddit's own docs within "1-2 business days" typically (check `https://developers.reddit.com/apps/verify-for-discord/developer-settings` for status) — this blocks the webhook call specifically, confirmed live via a real `PERMISSION_DENIED`/"domain ... is not allowed" error even in a playtest install; and (b) the "creates custom posts" app review, gated by `devvit publish`, with no stated turnaround, blocking real-subreddit installs. `devvit playtest`/`upload` against a small (<200-subscriber) throwaway dev subreddit is otherwise genuinely immediate — installing the app itself isn't the gate, its two permission grants are. As of this writing the app is submitted (v0.0.2), awaiting both reviews. Treat this the same way the original PRAW registration was treated: worth starting early and not blocking other work on. See DEVVIT_PIVOT_SPEC.md Prerequisites #5-6 for the full detail.
+1. ~~Register the Reddit API app now~~ Superseded, but **correcting an earlier note here** — a third time. The lead-time risk didn't disappear with the Devvit pivot, it moved: first thought resolved (playtest is immediate), then found to have moved to a domain-allowlist review (1-2 business days, confirmed live via a `PERMISSION_DENIED`/"domain ... is not allowed" error) *plus* a separate "creates custom posts" review with no stated turnaround. The domain-review half is now moot entirely — the custom VPS domain that review applied to was replaced with a Discord Incoming Webhook (`discord.com` is globally pre-allowed by Reddit's HTTP Fetch Policy, zero review needed) once it turned out personal domains are *never* approved, not just slow to approve. What remains: only the "creates custom posts" review, gated by `devvit publish`, no stated turnaround, blocking the real-subreddit install. As of this writing the app is submitted (v0.0.2), awaiting that one review. See DEVVIT_PIVOT_SPEC.md v4, Prerequisites #4.
 2. Decide final threshold values (Section 4) — can be adjusted post-launch based on false positives. Now set as Devvit app settings, not `.env` — see DEVVIT_PIVOT_SPEC.md.
 3. Pick a VPS provider (Hetzner/DigitalOcean/Oracle free tier) and provision it.
 4. Decide Phase 4 AI scope (if any) before estimating that cost bucket further.
