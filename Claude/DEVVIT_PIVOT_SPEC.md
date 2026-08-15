@@ -119,9 +119,26 @@ No scheduler, no cron, no inbox reading. Purely event-driven.
    requires HTTPS. See `deploy/nginx-verify.conf.example` for the exact steps.
 3. nginx (or similar) reverse proxy on the VPS terminating TLS, forwarding to
    `webhook_receiver.py` on a local port (`127.0.0.1:8000` by default).
-4. ~~Confirm whether `permissions.http.enable` + `domains` triggers its own Devvit
-   App Review~~ **Confirmed moot**: Devvit app install/playtest was immediate in
-   the spike, no review queue encountered.
+4. Terms & Conditions and Privacy Policy links, set on Reddit's developer
+   settings page — required before `devvit publish` will run at all for any
+   app using the `http` plugin. See `docs/terms.html`/`docs/privacy.html`
+   (GitHub Pages, on `main`) for what was actually used.
+5. **Real Reddit App Review — confirmed required, turnaround unknown.**
+   Correcting an earlier note in this doc: `devvit playtest`/`devvit upload`
+   against a throwaway dev subreddit (<200 subscribers) *is* immediate, no
+   review queue — that part of the earlier "confirmed moot" note was accurate
+   for that path. But installing on a real subreddit requires `devvit
+   publish`, and publish is gated by human review for any app that "creates
+   custom posts" (this one does — the pinned "Verify for Discord" post).
+   `devvit publish` submits the version and returns immediately with "You'll
+   receive an email when your app has been approved" — no turnaround estimate
+   given. This reintroduces exactly the kind of unknown-lead-time item PLAN.md
+   §10 originally flagged for the PRAW script-app registration (2-4 weeks) —
+   it didn't go away with the Devvit pivot, it just moved to a different gate
+   later in the process. Until approval lands, `devvit install <subreddit>`
+   cannot be run and the pinned post cannot be created on the real subreddit,
+   which blocks getting `DEVVIT_POST_URL` and therefore blocks starting
+   `discord_bot.py` for real (`config.validate()` requires it).
 
 ## `webhook_receiver.py` (VPS side) — implemented
 
@@ -269,11 +286,32 @@ Done (this branch):
 - `db.py`'s old-schema → new-schema migration tested against a simulated
   pre-existing database, confirming data survives and the constraint fix takes
   effect without manual intervention.
+- Domain (`verify.verificationforyou.com`) + TLS + nginx live on the real VPS,
+  confirmed end-to-end from the public internet: unauthenticated POST to
+  `/devvit/verdict` → 401, authenticated POST with an unknown code → 400 —
+  the full chain (DNS → TLS → nginx → `webhook_receiver.py` → auth/idempotency
+  logic) works outside a lab. (Found and fixed along the way: certbot's nginx
+  plugin appended its SSL block into the generic `default` site rather than a
+  dedicated one, serving the domain as a static file root instead of proxying
+  to the app — replaced with a proper dedicated site file, reusing the
+  already-issued cert.)
+- Devvit app uploaded and settings (`webhookUrl`, `webhookSecret`) set against
+  the real, published app (not the throwaway spike one).
+- Terms & Conditions / Privacy Policy pages published (`docs/` on `main`,
+  GitHub Pages) and linked on Reddit's developer settings — required before
+  `devvit publish` would even run for an app using the `http` plugin.
+- `devvit publish` submitted successfully (version 0.0.2) — now pending human
+  review (see Prerequisites #5 above).
 
 Still open:
+- **Reddit's review of the published app** — no ETA given, blocks everything
+  below until it clears.
 - Confirm `getUserKarmaFromCurrentSubreddit()`'s moderator-gating with a second,
   non-mod Reddit account (PLAN.md §10 item 7) — can likely be combined with the
   hidden-profile mod-vs-non-mod test (item 6) since both need a second test account.
-- Domain + TLS + nginx end-to-end (nothing to test yet — no domain provisioned).
-- A real `devvit publish` + subreddit install, as opposed to `devvit playtest`
-  against a throwaway dev subreddit.
+- `devvit install <subreddit>` on the real subreddit once approved, which
+  triggers `onAppInstall` to create the pinned post — needed to get
+  `DEVVIT_POST_URL` for the VPS `.env` and unblock starting `discord_bot.py`
+  for real.
+- A full live run: real Discord user clicks Verify → DMs code + post link →
+  submits on Reddit → webhook → role assignment/DM → log-channel embed.

@@ -150,7 +150,7 @@ CREATE INDEX idx_code ON verifications(code);
 
 ## 10. Open Decisions / Next Steps
 
-1. ~~Register the Reddit API app now~~ Superseded — no comparable lead-time item exists for the Devvit path; app install is immediate. Remaining setup: point a domain at the VPS and get a TLS cert (see DEVVIT_PIVOT_SPEC.md prerequisites).
+1. ~~Register the Reddit API app now~~ Superseded, but **correcting an earlier note here**: the lead-time risk didn't disappear with the Devvit pivot, it moved. `devvit playtest`/`upload` against a small (<200-subscriber) throwaway dev subreddit is genuinely immediate — that was confirmed and is still true. But installing on a real subreddit requires `devvit publish`, which is gated by actual Reddit human review for any app that creates custom posts (this one does), with no turnaround estimate given ("you'll receive an email when approved"). As of this writing the app is submitted (v0.0.2) and awaiting that review. Treat this the same way the original PRAW registration was treated: the longest-lead-time item, worth starting early and not blocking other work on.
 2. Decide final threshold values (Section 4) — can be adjusted post-launch based on false positives. Now set as Devvit app settings, not `.env` — see DEVVIT_PIVOT_SPEC.md.
 3. Pick a VPS provider (Hetzner/DigitalOcean/Oracle free tier) and provision it.
 4. Decide Phase 4 AI scope (if any) before estimating that cost bucket further.
