@@ -35,7 +35,9 @@
     },
     "http": {
       "enable": true,
-      "domains": ["verify.verificationforyou.com"]
+      "domains": [
+        "verify.verificationforyou.com"
+      ]
     }
   },
   "settings": {
@@ -80,5 +82,8 @@
   "scripts": {
     "dev": "vite build --watch",
     "build": "vite build"
+  },
+  "dev": {
+    "subreddit": "verify_for_discor_dev"
   }
 }

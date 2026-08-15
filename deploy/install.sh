@@ -48,6 +48,12 @@ if ! id -u "${SERVICE_USER}" >/dev/null 2>&1; then
 fi
 
 echo "==> Fetching code into ${INSTALL_DIR}"
+# This script runs as root, but the repo ends up owned by ${SERVICE_USER}
+# (see chown below) -- git refuses to operate on a repo it doesn't own unless
+# told it's safe (CVE-2022-24765 mitigation). Without this, a re-run after the
+# first chown fails with "detected dubious ownership".
+git config --global --add safe.directory "${INSTALL_DIR}"
+
 if [[ -d "${INSTALL_DIR}/.git" ]]; then
     git -C "${INSTALL_DIR}" pull
 else
