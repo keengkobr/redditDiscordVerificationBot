@@ -35,7 +35,12 @@ def extract_code(body: str):
 def check_thresholds(reddit: praw.Reddit, username: str):
     """Run the checks from PLAN.md Section 4.
 
-    Returns (passed: bool, fail_reason: str | None).
+    Returns (passed: bool, fail_reason: str | None, metrics: dict | None).
+    metrics holds the raw numbers the verdict was based on (account_age_days,
+    total_karma, subreddit_activity_count, subreddit_karma) for the verification
+    log channel (VerificationLogChannel.md) — None only when we couldn't reach
+    the account at all (reddit_account_not_found), since there's nothing to report.
+
     fail_reason == "no_visible_activity" is a *soft fail* (PLAN.md Section 11)
     and should be routed to mod review rather than treated as a hard reject —
     it usually means a curated/hidden profile, not a burner account.
@@ -46,7 +51,7 @@ def check_thresholds(reddit: praw.Reddit, username: str):
         link_karma = redditor.link_karma
         comment_karma = redditor.comment_karma
     except (prawcore.exceptions.NotFound, prawcore.exceptions.Forbidden):
-        return False, "reddit_account_not_found"
+        return False, "reddit_account_not_found", None
 
     account_age_days = (time.time() - created_utc) / 86400
     total_karma = link_karma + comment_karma
@@ -71,6 +76,13 @@ def check_thresholds(reddit: praw.Reddit, username: str):
         # Suspended/shadowbanned or otherwise inaccessible — treat as no history found.
         pass
 
+    metrics = {
+        "account_age_days": int(account_age_days),
+        "total_karma": total_karma,
+        "subreddit_activity_count": sub_count,
+        "subreddit_karma": sub_karma,
+    }
+
     reasons = []
     if account_age_days < config.MIN_ACCOUNT_AGE_DAYS:
         reasons.append(f"account_age:{account_age_days:.0f}d<{config.MIN_ACCOUNT_AGE_DAYS}d")
@@ -82,15 +94,15 @@ def check_thresholds(reddit: praw.Reddit, username: str):
         reasons.append(f"subreddit_karma:{sub_karma}<{config.MIN_SUBREDDIT_KARMA}")
 
     if not reasons:
-        return True, None
+        return True, None, metrics
 
     # Zero subreddit activity visible at all, despite an account old enough to plausibly
     # have some, is the classic curated/hidden-profile false negative (Section 11) —
     # soft-fail it instead of hard-rejecting.
     if sub_count == 0 and account_age_days >= config.MIN_ACCOUNT_AGE_DAYS:
-        return False, "no_visible_activity"
+        return False, "no_visible_activity", metrics
 
-    return False, ";".join(reasons)
+    return False, ";".join(reasons), metrics
 
 
 def process_inbox(reddit: praw.Reddit, conn) -> None:
@@ -119,12 +131,13 @@ def process_inbox(reddit: praw.Reddit, conn) -> None:
                 db.set_result(conn, pending["id"], "failed", author, "reddit_account_already_linked")
                 continue
 
-            passed, fail_reason = check_thresholds(reddit, author)
+            passed, fail_reason, metrics = check_thresholds(reddit, author)
+            metrics = metrics or {}
             if passed:
-                db.set_result(conn, pending["id"], "verified", author, None)
+                db.set_result(conn, pending["id"], "verified", author, None, **metrics)
                 print(f"[reddit_poller] verified u/{author} -> discord {pending['discord_user_id']}")
             else:
-                db.set_result(conn, pending["id"], "failed", author, fail_reason)
+                db.set_result(conn, pending["id"], "failed", author, fail_reason, **metrics)
                 print(f"[reddit_poller] failed u/{author}: {fail_reason}")
 
         except Exception as exc:  # noqa: BLE001 - keep the loop alive no matter what

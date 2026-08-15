@@ -6,6 +6,7 @@ Never talks to reddit_poller.py directly — only through verify.db.
 """
 
 import asyncio
+from datetime import datetime, timezone
 
 import discord
 from discord.ext import commands, tasks
@@ -190,6 +191,18 @@ async def process_results() -> None:
         finally:
             await run_db(db.mark_processed, row["id"])
 
+    # Tracked via its own logged_to_discord flag rather than processed_at, so a
+    # crash between role/DM handling and log-posting still gets the log entry
+    # posted on the next pass or after a restart (VerificationLogChannel.md).
+    log_rows = await run_db(db.get_unlogged_results)
+    for row in log_rows:
+        try:
+            await post_verification_log(row)
+        except Exception as exc:  # noqa: BLE001 - retry next loop instead of losing the entry
+            print(f"[discord_bot] error posting verification log id={row['id']}: {exc}")
+        else:
+            await run_db(db.mark_logged, row["id"])
+
 
 async def handle_result(row) -> None:
     guild = bot.get_guild(config.DISCORD_GUILD_ID)
@@ -231,6 +244,81 @@ async def handle_result(row) -> None:
                     f"verified as u/{row['reddit_username']} but no visible "
                     f"r/{config.SUBREDDIT_NAME} activity was found."
                 )
+
+
+# ---------------------------------------------------------------------------
+# Verification log channel (VerificationLogChannel.md)
+# ---------------------------------------------------------------------------
+
+LOG_COLOR_PASS = 0x2ECC71
+LOG_COLOR_FAIL = 0xE74C3C
+
+
+def _metric_line(value, threshold, label: str, unit: str = "") -> str:
+    """One line of the log embed. Bolds the whole line when this specific
+    check is the one that failed, so a mod can tell at a glance which
+    threshold(s) tripped without doing the math themselves.
+    """
+    shown = "N/A" if value is None else value
+    failed = value is not None and value < threshold
+    line = f"{label}: {shown}{unit} (needs {threshold}{unit}+)"
+    return f"**{line}**" if failed else line
+
+
+async def post_verification_log(row) -> None:
+    channel = bot.get_channel(config.VERIFICATION_LOG_CHANNEL_ID)
+    if not channel:
+        return  # Not configured — logging is optional.
+
+    mention = f"<@{row['discord_user_id']}>"
+    reddit_username = row["reddit_username"] or "unknown"
+
+    if row["status"] == "verified":
+        verified_at = (
+            datetime.fromtimestamp(row["verified_at"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+            if row["verified_at"]
+            else "N/A"
+        )
+        embed = discord.Embed(
+            title=f"✅ Verified — u/{reddit_username}",
+            description=f"{mention}",
+            color=LOG_COLOR_PASS,
+        )
+        embed.add_field(name="Account age", value=f"{row['account_age_days']} days", inline=False)
+        embed.add_field(name="Total karma", value=str(row["total_karma"]), inline=False)
+        embed.add_field(
+            name=f"r/{config.SUBREDDIT_NAME} activity",
+            value=f"{row['subreddit_activity_count']} posts/comments, {row['subreddit_karma']} karma",
+            inline=False,
+        )
+        embed.add_field(name="Verified at", value=verified_at, inline=False)
+    else:
+        lines = [
+            _metric_line(row["account_age_days"], config.MIN_ACCOUNT_AGE_DAYS, "Account age", " days"),
+            _metric_line(row["total_karma"], config.MIN_TOTAL_KARMA, "Total karma"),
+            _metric_line(
+                row["subreddit_activity_count"],
+                config.MIN_SUBREDDIT_ACTIVITY_COUNT,
+                f"r/{config.SUBREDDIT_NAME} activity",
+                " posts/comments",
+            ),
+            _metric_line(row["subreddit_karma"], config.MIN_SUBREDDIT_KARMA, f"r/{config.SUBREDDIT_NAME} karma"),
+        ]
+        if row["fail_reason"] in ("reddit_account_not_found", "code_expired", "reddit_account_already_linked"):
+            # No threshold check ran at all — the metric lines would just be all-N/A noise.
+            lines = [f"Reason: `{row['fail_reason']}`"]
+        if row["fail_reason"] == "no_visible_activity" and config.MOD_REVIEW_CHANNEL_ID:
+            mod_channel = bot.get_channel(config.MOD_REVIEW_CHANNEL_ID)
+            if mod_channel:
+                lines.append(f"Routed to: #{mod_channel.name}")
+
+        embed = discord.Embed(
+            title=f"❌ Failed — u/{reddit_username}",
+            description=f"{mention}\n" + "\n".join(lines),
+            color=LOG_COLOR_FAIL,
+        )
+
+    await channel.send(embed=embed)
 
 
 # ---------------------------------------------------------------------------

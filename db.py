@@ -25,6 +25,11 @@ CREATE TABLE IF NOT EXISTS verifications (
     verified_at INTEGER,
     fail_reason TEXT,
     processed_at INTEGER,
+    account_age_days INTEGER,
+    total_karma INTEGER,
+    subreddit_activity_count INTEGER,
+    subreddit_karma INTEGER,
+    logged_to_discord INTEGER DEFAULT 0,
     UNIQUE(reddit_username)
 );
 
@@ -32,6 +37,21 @@ CREATE INDEX IF NOT EXISTS idx_discord_user ON verifications(discord_user_id);
 CREATE INDEX IF NOT EXISTS idx_code ON verifications(code);
 CREATE INDEX IF NOT EXISTS idx_status_processed ON verifications(status, processed_at);
 """
+# idx_status_logged is created in _migrate(), not here: on an existing (pre-this-feature)
+# database the logged_to_discord column doesn't exist until _migrate() adds it, and this
+# script runs via executescript() *before* _migrate() — an index on that column here would
+# fail with "no such column" on any already-deployed verify.db.
+
+# Columns added after the initial release. Applied via PRAGMA-checked ALTER TABLE
+# so existing verify.db files on already-deployed VPSes upgrade in place — the
+# CREATE TABLE above only takes effect for brand-new databases.
+_MIGRATION_COLUMNS = {
+    "account_age_days": "INTEGER",
+    "total_karma": "INTEGER",
+    "subreddit_activity_count": "INTEGER",
+    "subreddit_karma": "INTEGER",
+    "logged_to_discord": "INTEGER DEFAULT 0",
+}
 
 
 def connect(db_path: str) -> sqlite3.Connection:
@@ -42,10 +62,19 @@ def connect(db_path: str) -> sqlite3.Connection:
     return conn
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(verifications)")}
+    for column, declaration in _MIGRATION_COLUMNS.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE verifications ADD COLUMN {column} {declaration}")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_status_logged ON verifications(status, logged_to_discord)")
+
+
 def init_db(db_path: str) -> None:
     conn = connect(db_path)
     try:
         conn.executescript(SCHEMA)
+        _migrate(conn)
         conn.commit()
     finally:
         conn.close()
@@ -121,13 +150,39 @@ def is_reddit_username_taken(conn, reddit_username: str, exclude_id=None) -> boo
     return row is not None
 
 
-def set_result(conn, verification_id: int, status: str, reddit_username, fail_reason) -> None:
+def set_result(
+    conn,
+    verification_id: int,
+    status: str,
+    reddit_username,
+    fail_reason,
+    account_age_days=None,
+    total_karma=None,
+    subreddit_activity_count=None,
+    subreddit_karma=None,
+) -> None:
+    """Record a verdict. The four metric args are the raw numbers the verdict was
+    based on (VerificationLogChannel.md) — pass them whenever check_thresholds()
+    actually ran (i.e. for every pass/fail past reddit_account_not_found), so the
+    log embed can show real numbers instead of a bare category string.
+    """
     now = int(time.time())
     verified_at = now if status == "verified" else None
     conn.execute(
         "UPDATE verifications SET status = ?, reddit_username = ?, fail_reason = ?, "
-        "verified_at = ? WHERE id = ?",
-        (status, reddit_username, fail_reason, verified_at, verification_id),
+        "verified_at = ?, account_age_days = ?, total_karma = ?, "
+        "subreddit_activity_count = ?, subreddit_karma = ? WHERE id = ?",
+        (
+            status,
+            reddit_username,
+            fail_reason,
+            verified_at,
+            account_age_days,
+            total_karma,
+            subreddit_activity_count,
+            subreddit_karma,
+            verification_id,
+        ),
     )
 
 
@@ -154,6 +209,25 @@ def mark_processed(conn, verification_id: int) -> None:
     conn.execute(
         "UPDATE verifications SET processed_at = ? WHERE id = ?",
         (int(time.time()), verification_id),
+    )
+
+
+def get_unlogged_results(conn):
+    """Verdicts not yet posted to the Discord log channel. Tracked independently
+    of processed_at so a crash between role/DM handling and log-posting doesn't
+    lose the log entry — it's picked up again on the next poll/restart regardless
+    of whether processed_at was already set.
+    """
+    return conn.execute(
+        "SELECT * FROM verifications WHERE status IN ('verified', 'failed') "
+        "AND logged_to_discord = 0 ORDER BY id ASC"
+    ).fetchall()
+
+
+def mark_logged(conn, verification_id: int) -> None:
+    conn.execute(
+        "UPDATE verifications SET logged_to_discord = 1 WHERE id = ?",
+        (verification_id,),
     )
 
 
