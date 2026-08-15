@@ -124,9 +124,16 @@ export const appRouter = t.router({
         const thresholds = await getThresholds();
         const { passed, failReason } = evaluate(metrics, thresholds);
 
-        // Written on confirmed identity regardless of pass/fail -- see
-        // DEVVIT_PIVOT_SPEC.md v5's "Anti-duplicate KV write timing" section.
-        await recordDedupLink(claim.claimedUsername, claim.discordUserId);
+        // Written only on an actual pass -- see DEVVIT_PIVOT_SPEC.md v5's
+        // "Anti-duplicate KV write timing" section. A failed-threshold
+        // attempt (e.g. someone accidentally logged into an alt/admin
+        // Reddit account with no history in the subreddit) never locks
+        // that Reddit account against retrying under a different Discord
+        // account -- there's no self-service recovery for that otherwise,
+        // since Discord-side /unlink can't reach this KV entry at all.
+        if (passed) {
+          await recordDedupLink(claim.claimedUsername, claim.discordUserId);
+        }
 
         try {
           await postVerdict({

@@ -73,6 +73,7 @@ COLOR_SOFT_FAIL = 0xF1C40F  # amber -- "no visible activity", routed to mod revi
 FAIL_REASON_TEXT = {
     "reddit_account_not_found": "🔍 We couldn't find that Reddit account.",
     "reddit_account_already_linked": "🔗 That Reddit account is already linked to a different Discord account.",
+    "username_mismatch": "🙅 Couldn't confirm the claimed Reddit account matched after 3 attempts.",
 }
 
 NO_VISIBLE_ACTIVITY_NOTE = (
@@ -211,6 +212,23 @@ async def handle_verify_click(interaction: discord.Interaction) -> None:
             )
             return
 
+        # Past cooldown but the code is still valid (stage == "awaiting_verdict").
+        # Re-send the SAME code instead of falling through to start a brand new
+        # session -- that used to silently abandon the in-flight one (and its
+        # short_id), so a verdict for the old code would arrive to find no
+        # matching session at all and get discarded, with no result DM ever
+        # sent. Re-sending costs nothing and can't orphan anything.
+        session["updated_at"] = now
+        try:
+            await send_code_dm(interaction.user, discord_user_id, session)
+            await interaction.response.send_message("Sent you the code again — check your DMs! 📬", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "I can't DM you — enable DMs from server members (Privacy Settings) and click Verify again.",
+                ephemeral=True,
+            )
+        return
+
     SESSIONS[discord_user_id] = {
         "stage": "awaiting_username",
         "claimed_username": None,
@@ -257,7 +275,15 @@ async def handle_username_reply(message: discord.Message, session: dict) -> None
     )
     CODE_TO_USER[short_id] = discord_user_id
 
-    code = build_code(short_id, normalized, discord_user_id)
+    await send_code_dm(message.channel, discord_user_id, session)
+
+
+async def send_code_dm(destination, discord_user_id: str, session: dict) -> None:
+    """Builds and sends the code+link DM. Shared by handle_username_reply
+    (issuing a fresh code) and handle_verify_click (re-sending an existing,
+    still-valid one -- see the fallthrough note there for why that matters).
+    """
+    code = build_code(session["short_id"], session["claimed_username"], discord_user_id)
     embed = discord.Embed(
         title="📋 Almost there!",
         description=(
@@ -283,7 +309,7 @@ async def handle_username_reply(message: discord.Message, session: dict) -> None
             emoji="🔗",
         )
     )
-    await message.channel.send(embed=embed, view=link_view)
+    await destination.send(embed=embed, view=link_view)
 
 
 # ---------------------------------------------------------------------------
@@ -495,14 +521,34 @@ async def handle_verdict(short_id: str, payload: "verdict.VerdictPayload") -> No
         session["mismatch_count"] += 1
         session["short_id"] = None
         if session["mismatch_count"] >= 3:
-            await flag_username_mismatch_for_mods(discord_user_id, session)
+            row = {
+                "discord_user_id": discord_user_id,
+                "reddit_username": session["claimed_username"],
+                "status": "failed",
+                "fail_reason": "username_mismatch",
+                "account_age_days": None,
+                "total_karma": None,
+                "subreddit_activity_count": None,
+                "subreddit_karma": None,
+                "verified_at": None,
+            }
             SESSIONS.pop(discord_user_id, None)
+            await flag_username_mismatch_for_mods(row)
+            try:
+                await post_verification_log(row)
+            except Exception as exc:  # noqa: BLE001 - don't let a log-post failure block the user's DM below
+                print(f"[discord_bot] error posting verification log for username-mismatch exhaustion (user={discord_user_id}): {exc}")
             try:
                 user = await bot.fetch_user(int(discord_user_id))
-                await user.send(
-                    "We couldn't confirm that Reddit account matches after a few tries — "
-                    "we've flagged this for a mod to take a look."
+                embed = discord.Embed(
+                    title="🔎 Sent to the mod team",
+                    description=(
+                        "We couldn't confirm that Reddit account matches after a few tries — "
+                        "we've flagged this for a mod to take a look."
+                    ),
+                    color=COLOR_SOFT_FAIL,
                 )
+                await user.send(embed=embed)
             except discord.Forbidden:
                 pass
         else:
@@ -510,10 +556,16 @@ async def handle_verdict(short_id: str, payload: "verdict.VerdictPayload") -> No
             session["updated_at"] = time.time()
             try:
                 user = await bot.fetch_user(int(discord_user_id))
-                await user.send(
-                    f"That didn't match the Reddit account you told us about "
-                    f"({session['mismatch_count']}/3). Reply here with your Reddit username to try again."
+                embed = discord.Embed(
+                    title="❌ That didn't match",
+                    description=(
+                        "That didn't match the Reddit account you told us about "
+                        f"**({session['mismatch_count']}/3)**. Reply here with your Reddit "
+                        "username to try again."
+                    ),
+                    color=COLOR_FAIL,
                 )
+                await user.send(embed=embed)
             except discord.Forbidden:
                 pass
         return
@@ -543,22 +595,28 @@ async def handle_verdict(short_id: str, payload: "verdict.VerdictPayload") -> No
         print(f"[discord_bot] error posting verification log for code {short_id!r}: {exc}")
 
 
-async def flag_username_mismatch_for_mods(discord_user_id: str, session: dict) -> None:
+async def flag_username_mismatch_for_mods(row: dict) -> None:
+    """Proactive auto-flag after 3 failed username-match attempts -- same
+    pattern as the no_visible_activity soft-fail flag in handle_result(),
+    just for a different failure mode. row["fail_reason"] == "username_mismatch"
+    always here, so the FAIL_REASON_TEXT lookup is really just for the shared
+    copy, not branching.
+    """
     mod_channel = bot.get_channel(config.MOD_REVIEW_CHANNEL_ID)
     if not mod_channel:
         return
     embed = discord.Embed(
-        title="🔎 Manual Review Requested",
+        title="🔎 Manual Review Requested — Username Mismatch",
         description=(
-            f"<@{discord_user_id}> couldn't confirm a Reddit account after 3 attempts.\n"
-            f"Last claimed: u/{session['claimed_username']}"
+            f"<@{row['discord_user_id']}> — last claimed u/{row['reddit_username']}"
         ),
         color=COLOR_SOFT_FAIL,
     )
+    embed.add_field(name="Reason", value=FAIL_REASON_TEXT[row["fail_reason"]], inline=False)
     try:
         await mod_channel.send(embed=embed)
     except discord.Forbidden:
-        print(f"[discord_bot] missing permission to post in MOD_REVIEW_CHANNEL_ID (username mismatch, user={discord_user_id})")
+        print(f"[discord_bot] missing permission to post in MOD_REVIEW_CHANNEL_ID (username mismatch, user={row['discord_user_id']})")
 
 
 # ---------------------------------------------------------------------------
@@ -600,7 +658,10 @@ async def handle_result(row: dict) -> None:
             embed = discord.Embed(title="❌ Verification didn't pass", color=COLOR_FAIL)
 
             if row["fail_reason"] in FAIL_REASON_TEXT:
-                embed.description = FAIL_REASON_TEXT[row["fail_reason"]]
+                embed.description = (
+                    f"{FAIL_REASON_TEXT[row['fail_reason']]}\n"
+                    f"Attempted: u/{row['reddit_username']}"
+                )
             else:
                 embed.add_field(name="Requirements", value="\n".join(_requirement_lines(row)), inline=False)
                 if row["fail_reason"] == "no_visible_activity":
@@ -714,11 +775,22 @@ async def ensure_verify_message() -> None:
     await msg.pin()
 
 
+_views_registered = False
+
+
 @bot.event
 async def on_ready() -> None:
     print(f"[discord_bot] logged in as {bot.user}")
-    bot.add_view(VerifyView())
-    bot.add_view(ManualReviewView())
+    global _views_registered
+    if not _views_registered:
+        # on_ready can fire more than once per process (e.g. after a gateway
+        # reconnect) -- re-registering these every time adds a duplicate
+        # listener for the same custom_id, which makes a single button click
+        # dispatch twice (the second dispatch then crashes trying to ack an
+        # already-acknowledged interaction). Register exactly once.
+        bot.add_view(VerifyView())
+        bot.add_view(ManualReviewView())
+        _views_registered = True
     await bot.tree.sync()
     await ensure_verify_message()
     await ensure_relay_webhook()

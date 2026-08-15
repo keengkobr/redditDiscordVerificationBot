@@ -126,20 +126,30 @@ issued-but-unsubmitted code. Both are accepted, not bugs:
 - A dropped in-flight code behaves identically to that code expiring on its own; the user's only
   recourse either way is clicking Verify again. No reconnect/resume logic was built for this.
 
-## Anti-duplicate KV write timing
+## Anti-duplicate KV write timing (revised after playtest)
 
-Devvit's Redis dedup entry (`recordDedupLink` in `verify.ts`) is written whenever `username_ok` is
-true, **regardless of whether thresholds subsequently pass or fail** -- not on overall pass/fail. The
-dedup check exists to stop one real Reddit account from linking to multiple Discord accounts, which is
-a property of *confirmed identity*, not of *current karma*. A user who fails the username check gets
-the 3-attempt retry before mod review, same as above -- never penalized in the dedup store for a typo.
-The KV key is `reddit_username -> discord_user_id` (not a bare boolean), so the *same* Discord account
-can retry later once their account improves without being misread as a duplicate-account attempt.
-**This nuance (same-account retries staying unblocked) needs to be validated against real accounts in
-the dev subreddit before being treated as fully settled** -- flagged by Colby as something to confirm
-empirically once the app is playtested, not just correct on paper. Devvit's KV scope (per-app vs.
-per-subreddit-install) is likewise something to confirm empirically during that same testing pass
-rather than assumed.
+**Resolved via playtest, superseding the original plan below.** The first version of this design
+wrote the dedup entry whenever `username_ok` was true, regardless of threshold pass/fail. Playtest
+surfaced a real gap in that: someone who accidentally verifies against the wrong-but-real Reddit
+account (e.g. logged into an alt/admin account with no subreddit history) fails thresholds and gets
+that Reddit account locked to their Discord account for the full TTL -- with **no self-service
+recovery path at all**, since Discord-side `/unlink` structurally can't reach this KV entry (that's
+the whole point of the TTL design -- no inbound callback from the VPS into Devvit). Confirmed the
+role-gate on `/unlink` wasn't the real problem here: even an unrestricted `/unlink` couldn't fix this,
+because it never touches Devvit's side at all.
+
+Fix: `recordDedupLink` is now called **only when `passed` is true** (`trpc.ts`), not merely on
+`username_ok`. A failed-threshold attempt never locks the Reddit account against anything -- any
+Discord account (including a corrected one) can retry immediately. The dedup check still does its
+job once someone actually passes: at that point the Reddit account is genuinely spoken for, and
+locking it against a *different* Discord account for 30 days is the intended anti-abuse behavior.
+Same-account retries after a pass are unaffected (still keyed `reddit_username -> discord_user_id`,
+so re-linking to yourself was never blocked either way).
+
+Considered and rejected: adding a Devvit-side moderator menu action to manually clear a stuck dedup
+entry (mirroring the existing "Create Verify for Discord post" action). Would still be a reasonable
+backstop for edge cases the write-timing fix doesn't cover, but Colby chose the simpler write-timing
+fix alone for now -- revisit if a scenario surfaces that this doesn't handle.
 
 ## Unverified role handoff (new functional fix, not present in any prior version)
 
