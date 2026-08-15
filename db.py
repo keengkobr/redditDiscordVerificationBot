@@ -24,14 +24,21 @@ CREATE TABLE IF NOT EXISTS verifications (
     code_created_at INTEGER NOT NULL,
     verified_at INTEGER,
     fail_reason TEXT,
-    processed_at INTEGER,
-    UNIQUE(reddit_username)
+    processed_at INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_discord_user ON verifications(discord_user_id);
 CREATE INDEX IF NOT EXISTS idx_code ON verifications(code);
 CREATE INDEX IF NOT EXISTS idx_status_processed ON verifications(status, processed_at);
 """
+# The reddit_username uniqueness constraint is a PARTIAL index scoped to
+# status='verified' (created in _migrate(), not here), not a table-wide
+# UNIQUE(reddit_username) column constraint. One Reddit account per Discord
+# account (PLAN.md Section 5) only needs to hold among *active, verified*
+# claims -- a table-wide constraint also blocked writing a second 'failed' row
+# for a username that's verified elsewhere (or even two 'failed' rows sharing
+# a username), which raised IntegrityError on a legitimate, expected case: a
+# user retrying verification with the same Reddit account after a failure.
 
 
 def connect(db_path: str) -> sqlite3.Connection:
@@ -42,10 +49,43 @@ def connect(db_path: str) -> sqlite3.Connection:
     return conn
 
 
+def _has_table_wide_reddit_username_unique(conn: sqlite3.Connection) -> bool:
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='verifications'"
+    ).fetchone()
+    return bool(row and row["sql"] and "UNIQUE(reddit_username)" in row["sql"].replace(" ", "")
+                .replace("\n", ""))
+
+
+def _rebuild_table_without_column_unique(conn: sqlite3.Connection) -> None:
+    """SQLite can't ALTER TABLE to drop a column-level UNIQUE constraint --
+    only a full rebuild does it. Only reached for a verify.db created before
+    this fix; new databases never hit this path (see SCHEMA above).
+    """
+    conn.execute("ALTER TABLE verifications RENAME TO verifications_old")
+    conn.executescript(SCHEMA)
+    columns = [row["name"] for row in conn.execute("PRAGMA table_info(verifications_old)")]
+    common = ", ".join(c for c in columns if c != "id")
+    conn.execute(
+        f"INSERT INTO verifications (id, {common}) SELECT id, {common} FROM verifications_old"
+    )
+    conn.execute("DROP TABLE verifications_old")
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    if _has_table_wide_reddit_username_unique(conn):
+        _rebuild_table_without_column_unique(conn)
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_verified_reddit_username "
+        "ON verifications(reddit_username) WHERE status = 'verified'"
+    )
+
+
 def init_db(db_path: str) -> None:
     conn = connect(db_path)
     try:
         conn.executescript(SCHEMA)
+        _migrate(conn)
         conn.commit()
     finally:
         conn.close()
