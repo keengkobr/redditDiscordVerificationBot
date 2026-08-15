@@ -229,10 +229,18 @@ async def on_interaction(interaction: discord.Interaction) -> None:
     if not custom_id.startswith("request_review:"):
         return
 
+    # Discord requires a response within 3 seconds or shows "didn't respond in
+    # time" -- even if the action actually completes right after. The DB
+    # lookup below can occasionally take longer than that (db.py's 30-second
+    # busy_timeout means a concurrent write elsewhere can stall a read), so
+    # acknowledge immediately and do the real work via a followup instead of
+    # risking that window on every click.
+    await interaction.response.defer(ephemeral=True)
+
     verification_id = int(custom_id.split(":", 1)[1])
     row = await run_db(db.get_verification_by_id, verification_id)
     if not row:
-        await interaction.response.send_message(
+        await interaction.followup.send(
             "Couldn't find that verification record — try clicking Verify again.", ephemeral=True
         )
         return
@@ -250,7 +258,7 @@ async def on_interaction(interaction: discord.Interaction) -> None:
             embed.add_field(name="Requirements", value="\n".join(_requirement_lines(row)), inline=False)
         await mod_channel.send(embed=embed)
 
-    await interaction.response.send_message("Sent to the mod team — someone will follow up soon.", ephemeral=True)
+    await interaction.followup.send("Sent to the mod team — someone will follow up soon.", ephemeral=True)
     if interaction.message:
         try:
             await interaction.message.edit(view=None)
