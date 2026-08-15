@@ -46,16 +46,16 @@ No public thread posting, no OAuth server to host, one tap plus one send on the 
 
 ## 4. Verification Thresholds (tunable)
 
-| Check | Starting value | Notes |
+| Check | Value | Notes |
 |---|---|---|
 | Account age | 30+ days | Kills same-day burners |
-| Total karma | 100+ | Weak alone, filters obvious bots |
-| Subreddit-specific post/comment count | 5+ | Proves real participation, not just account existence |
-| Subreddit-specific karma | 20+ | Proves contributions weren't universally downvoted/spam |
+| Total karma | ~~100+~~ 50+ | Weak alone, filters obvious bots |
+| Subreddit-specific post/comment count | ~~5+~~ 1+ | Proves real participation, not just account existence |
+| Subreddit-specific karma | ~~20+~~ 50+ | Proves contributions weren't universally downvoted/spam |
 | Code expiry | 30 min | Prevents stale/shared codes |
 | One Reddit account per Discord account | enforced | Stored in DB, rejected on reuse |
 
-Start stricter, loosen based on false-positive reports from real members — easier to relax later than to clean up a raid after the fact.
+Started stricter, loosened based on real testing rather than waiting for false-positive reports — this is exactly the adjustment this section anticipated. Set as Devvit app settings now, not `.env` — see DEVVIT_PIVOT_SPEC.md.
 
 ---
 

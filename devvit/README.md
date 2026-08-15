@@ -79,10 +79,10 @@ Devvit at the app level, shared across every subreddit the app is installed on.
   only credential the app needs; the URL itself is the secret, so nothing
   else needs to be configured for the hand-off to work.
 - `minAccountAgeDays` — minimum account age, in days. Default 30.
-- `minTotalKarma` — minimum combined link + comment karma. Default 100.
+- `minTotalKarma` — minimum combined link + comment karma. Default 50.
 - `minSubredditActivityCount` — minimum post/comment count in this
-  subreddit. Default 5.
-- `minSubredditKarma` — minimum karma earned in this subreddit. Default 20.
+  subreddit. Default 1.
+- `minSubredditKarma` — minimum karma earned in this subreddit. Default 50.
 
 ## Permissions
 

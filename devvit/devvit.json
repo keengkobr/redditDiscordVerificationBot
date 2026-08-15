@@ -56,17 +56,17 @@
       "minTotalKarma": {
         "type": "number",
         "label": "Minimum total karma",
-        "defaultValue": 100
+        "defaultValue": 50
       },
       "minSubredditActivityCount": {
         "type": "number",
         "label": "Minimum subreddit post/comment count",
-        "defaultValue": 5
+        "defaultValue": 1
       },
       "minSubredditKarma": {
         "type": "number",
         "label": "Minimum subreddit karma",
-        "defaultValue": 20
+        "defaultValue": 50
       }
     }
   },

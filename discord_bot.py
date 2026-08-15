@@ -35,29 +35,75 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # dropped into the relay channel.
 _relay_webhook_id: int | None = None
 
-VERIFY_MESSAGE = (
-    "**Verify your Reddit account to unlock the rest of the server.**\n\n"
-    f"Requirements: a Reddit account that's been active in r/{config.SUBREDDIT_NAME} for a while — "
-    "not brand new, not a burner.\n\n"
-    "Click the button below. We'll DM you a one-tap Reddit link — tap it, hit **Send**, and you're "
-    "verified automatically within about a minute. No codes to type, nothing to post publicly."
-)
+# --- Colors + shared formatting (used by the verify-here embed, DMs, and the
+# verification log channel alike, so all three read as one consistent style) ---
+COLOR_INFO = 0x5865F2  # Discord blurple -- the pre-verification info embed
+COLOR_PASS = 0x2ECC71
+COLOR_FAIL = 0xE74C3C
+COLOR_SOFT_FAIL = 0xF1C40F  # amber -- "no visible activity", routed to mod review, not a hard reject
 
+# Fail reasons with no metrics behind them at all (nothing ran far enough to
+# produce numbers) -- shown as plain text instead of an empty requirements list.
 FAIL_REASON_TEXT = {
-    "reddit_account_not_found": "we couldn't find that Reddit account.",
-    "code_expired": "the verification code expired before we received it — click Verify again to get a new one.",
-    "reddit_account_already_linked": "that Reddit account is already linked to a different Discord account.",
-    "no_visible_activity": (
-        f"we couldn't find visible activity in r/{config.SUBREDDIT_NAME} on that account. "
-        "This can happen if your profile is set to private/curated — we've flagged it for a mod to double check."
-    ),
+    "reddit_account_not_found": "🔍 We couldn't find that Reddit account.",
+    "code_expired": "⏰ The verification code expired before we received it — click Verify again to get a new one.",
+    "reddit_account_already_linked": "🔗 That Reddit account is already linked to a different Discord account.",
 }
 
+NO_VISIBLE_ACTIVITY_NOTE = (
+    "We couldn't find visible activity in this subreddit on your account — this can happen if "
+    "your profile is set to private/curated. We've flagged it for a mod to double check."
+)
 
-def describe_fail_reason(fail_reason: str) -> str:
-    if fail_reason in FAIL_REASON_TEXT:
-        return FAIL_REASON_TEXT[fail_reason]
-    return f"your account didn't meet our activity requirements ({fail_reason})."
+
+def build_verify_embed() -> discord.Embed:
+    embed = discord.Embed(
+        title="🔒 Verify your Reddit account",
+        description=(
+            "Unlock the rest of the server by proving you're an active, real Reddit account — "
+            "not brand new, not a burner.\n\n"
+            "Click **Verify Reddit Account** below. We'll DM you a one-tap Reddit link — tap it, "
+            "hit **Send**, and you're verified automatically within about a minute. No codes to "
+            "type, nothing to post publicly."
+        ),
+        color=COLOR_INFO,
+    )
+    embed.add_field(
+        name="Requirements",
+        value=(
+            f"📅 Account age: **{config.MIN_ACCOUNT_AGE_DAYS}+ days**\n"
+            f"⭐ Total karma: **{config.MIN_TOTAL_KARMA}+**\n"
+            f"💬 Activity in r/{config.SUBREDDIT_NAME}: **{config.MIN_SUBREDDIT_ACTIVITY_COUNT}+ post/comment**\n"
+            f"🏆 Karma in r/{config.SUBREDDIT_NAME}: **{config.MIN_SUBREDDIT_KARMA}+**"
+        ),
+        inline=False,
+    )
+    return embed
+
+
+def _requirement_lines(row) -> list[str]:
+    """One bold, checkmarked line per requirement -- the shared building block
+    behind the verify DM, pass/fail DMs, and the log channel embed, so all of
+    them read as one consistent style instead of three different formats.
+    """
+
+    def line(value, threshold, label: str, unit: str = "") -> str:
+        if value is None:
+            return f"◽ **{label}** — N/A _(need {threshold}{unit}+)_"
+        emoji = "✅" if value >= threshold else "❌"
+        return f"{emoji} **{label}** — {value}{unit} _(need {threshold}{unit}+)_"
+
+    return [
+        line(row["account_age_days"], config.MIN_ACCOUNT_AGE_DAYS, "Account age", " days"),
+        line(row["total_karma"], config.MIN_TOTAL_KARMA, "Total karma"),
+        line(
+            row["subreddit_activity_count"],
+            config.MIN_SUBREDDIT_ACTIVITY_COUNT,
+            f"r/{config.SUBREDDIT_NAME} activity",
+            " posts/comments",
+        ),
+        line(row["subreddit_karma"], config.MIN_SUBREDDIT_KARMA, f"r/{config.SUBREDDIT_NAME} karma"),
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -298,19 +344,31 @@ async def handle_result(row) -> None:
                     print(f"[discord_bot] missing permission to assign role to {row['discord_user_id']}")
         try:
             user = member or await bot.fetch_user(int(row["discord_user_id"]))
-            await user.send(f"✅ You're verified as u/{row['reddit_username']}! Welcome in.")
+            embed = discord.Embed(
+                title="✅ You're verified!",
+                description=f"Welcome in — verified as **u/{row['reddit_username']}**.",
+                color=COLOR_PASS,
+            )
+            embed.add_field(name="Requirements", value="\n".join(_requirement_lines(row)), inline=False)
+            await user.send(embed=embed)
         except discord.Forbidden:
             pass
 
     elif row["status"] == "failed":
-        reason_text = describe_fail_reason(row["fail_reason"])
         try:
             user = member or await bot.fetch_user(int(row["discord_user_id"]))
-            await user.send(
-                f"❌ Verification didn't pass: {reason_text}\n\n"
-                "If you think this is a mistake, request a manual review below.",
-                view=ManualReviewView(row["id"]),
-            )
+            embed = discord.Embed(title="❌ Verification didn't pass", color=COLOR_FAIL)
+
+            if row["fail_reason"] in FAIL_REASON_TEXT:
+                embed.description = FAIL_REASON_TEXT[row["fail_reason"]]
+            else:
+                embed.add_field(name="Requirements", value="\n".join(_requirement_lines(row)), inline=False)
+                if row["fail_reason"] == "no_visible_activity":
+                    embed.color = COLOR_SOFT_FAIL
+                    embed.description = NO_VISIBLE_ACTIVITY_NOTE
+
+            embed.set_footer(text="Think this is a mistake? Request a manual review below.")
+            await user.send(embed=embed, view=ManualReviewView(row["id"]))
         except discord.Forbidden:
             pass
 
@@ -330,20 +388,6 @@ async def handle_result(row) -> None:
 # Verification log channel (VerificationLogChannel.md)
 # ---------------------------------------------------------------------------
 
-LOG_COLOR_PASS = 0x2ECC71
-LOG_COLOR_FAIL = 0xE74C3C
-
-
-def _metric_line(value, threshold, label: str, unit: str = "") -> str:
-    """One line of the log embed. Bolds the whole line when this specific
-    check is the one that failed, so a mod can tell at a glance which
-    threshold(s) tripped without doing the math themselves.
-    """
-    shown = "N/A" if value is None else value
-    failed = value is not None and value < threshold
-    line = f"{label}: {shown}{unit} (needs {threshold}{unit}+)"
-    return f"**{line}**" if failed else line
-
 
 async def post_verification_log(row) -> None:
     channel = bot.get_channel(config.VERIFICATION_LOG_CHANNEL_ID)
@@ -361,41 +405,27 @@ async def post_verification_log(row) -> None:
         )
         embed = discord.Embed(
             title=f"✅ Verified — u/{reddit_username}",
-            description=f"{mention}",
-            color=LOG_COLOR_PASS,
+            description=mention,
+            color=COLOR_PASS,
         )
-        embed.add_field(name="Account age", value=f"{row['account_age_days']} days", inline=False)
-        embed.add_field(name="Total karma", value=str(row["total_karma"]), inline=False)
-        embed.add_field(
-            name=f"r/{config.SUBREDDIT_NAME} activity",
-            value=f"{row['subreddit_activity_count']} posts/comments, {row['subreddit_karma']} karma",
-            inline=False,
-        )
-        embed.add_field(name="Verified at", value=verified_at, inline=False)
+        embed.add_field(name="Requirements", value="\n".join(_requirement_lines(row)), inline=False)
+        embed.set_footer(text=f"Verified at {verified_at}")
     else:
-        lines = [
-            _metric_line(row["account_age_days"], config.MIN_ACCOUNT_AGE_DAYS, "Account age", " days"),
-            _metric_line(row["total_karma"], config.MIN_TOTAL_KARMA, "Total karma"),
-            _metric_line(
-                row["subreddit_activity_count"],
-                config.MIN_SUBREDDIT_ACTIVITY_COUNT,
-                f"r/{config.SUBREDDIT_NAME} activity",
-                " posts/comments",
-            ),
-            _metric_line(row["subreddit_karma"], config.MIN_SUBREDDIT_KARMA, f"r/{config.SUBREDDIT_NAME} karma"),
-        ]
-        if row["fail_reason"] in ("reddit_account_not_found", "code_expired", "reddit_account_already_linked"):
-            # No threshold check ran at all — the metric lines would just be all-N/A noise.
-            lines = [f"Reason: `{row['fail_reason']}`"]
-        if row["fail_reason"] == "no_visible_activity" and config.MOD_REVIEW_CHANNEL_ID:
-            mod_channel = bot.get_channel(config.MOD_REVIEW_CHANNEL_ID)
-            if mod_channel:
-                lines.append(f"Routed to: #{mod_channel.name}")
+        color = COLOR_FAIL
+        if row["fail_reason"] in FAIL_REASON_TEXT:
+            description = f"{mention}\n{FAIL_REASON_TEXT[row['fail_reason']]}"
+        else:
+            lines = _requirement_lines(row)
+            if row["fail_reason"] == "no_visible_activity":
+                color = COLOR_SOFT_FAIL
+                lines.append("")
+                lines.append("🔎 Possible curated/hidden profile — routed to mod review.")
+            description = f"{mention}\n" + "\n".join(lines)
 
         embed = discord.Embed(
             title=f"❌ Failed — u/{reddit_username}",
-            description=f"{mention}\n" + "\n".join(lines),
-            color=LOG_COLOR_FAIL,
+            description=description,
+            color=color,
         )
 
     await channel.send(embed=embed)
@@ -415,7 +445,7 @@ async def ensure_verify_message() -> None:
     if any(msg.author == bot.user for msg in pins):
         return  # Already posted on a previous run.
 
-    msg = await channel.send(VERIFY_MESSAGE, view=VerifyView())
+    msg = await channel.send(embed=build_verify_embed(), view=VerifyView())
     await msg.pin()
 
 

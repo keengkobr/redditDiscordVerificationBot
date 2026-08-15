@@ -29,9 +29,9 @@ export type Verdict = {
 /** Mirrors PLAN.md Section 4 defaults -- overridden by app settings, same idea as .env on the PRAW side. */
 const DEFAULT_THRESHOLDS: Thresholds = {
   minAccountAgeDays: 30,
-  minTotalKarma: 100,
-  minSubredditActivityCount: 5,
-  minSubredditKarma: 20,
+  minTotalKarma: 50,
+  minSubredditActivityCount: 1,
+  minSubredditKarma: 50,
 };
 
 export async function getThresholds(): Promise<Thresholds> {

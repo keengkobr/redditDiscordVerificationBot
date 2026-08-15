@@ -52,9 +52,9 @@ DB_PATH = os.getenv("DB_PATH", "verify.db")
 # minAccountAgeDays/minTotalKarma/minSubredditActivityCount/minSubredditKarma
 # settings by hand -- there's no automatic sync between the two right now.
 MIN_ACCOUNT_AGE_DAYS = _get_int("MIN_ACCOUNT_AGE_DAYS", 30)
-MIN_TOTAL_KARMA = _get_int("MIN_TOTAL_KARMA", 100)
-MIN_SUBREDDIT_ACTIVITY_COUNT = _get_int("MIN_SUBREDDIT_ACTIVITY_COUNT", 5)
-MIN_SUBREDDIT_KARMA = _get_int("MIN_SUBREDDIT_KARMA", 20)
+MIN_TOTAL_KARMA = _get_int("MIN_TOTAL_KARMA", 50)
+MIN_SUBREDDIT_ACTIVITY_COUNT = _get_int("MIN_SUBREDDIT_ACTIVITY_COUNT", 1)
+MIN_SUBREDDIT_KARMA = _get_int("MIN_SUBREDDIT_KARMA", 50)
 CODE_EXPIRY_MINUTES = _get_int("CODE_EXPIRY_MINUTES", 30)
 CODE_COOLDOWN_SECONDS = _get_int("CODE_COOLDOWN_SECONDS", 60)
 
