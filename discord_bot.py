@@ -96,22 +96,19 @@ async def handle_verify_click(interaction: discord.Interaction) -> None:
 
     if result["state"] == "reused" and result.get("rate_limited"):
         await interaction.response.send_message(
-            "You've already got a code waiting — check your DMs for the Reddit link.",
+            "You've already got a code waiting — check your DMs for it.",
             ephemeral=True,
         )
         return
 
     code = result["code"]
-    reddit_link = (
-        f"https://www.reddit.com/message/compose/"
-        f"?to={config.REDDIT_USERNAME}&subject=verify&message={code}"
-    )
 
     try:
         await interaction.user.send(
-            "**Almost there!** Tap the link below, then just hit **Send** on Reddit — "
-            "don't edit the message text.\n\n"
-            f"{reddit_link}\n\n"
+            "**Almost there!** Open the pinned verification post on Reddit, click **Verify**, "
+            "and paste in this code:\n\n"
+            f"`{code}`\n\n"
+            f"{config.DEVVIT_POST_URL}\n\n"
             f"This code expires in {config.CODE_EXPIRY_MINUTES} minutes. "
             "You'll get a DM here as soon as it's checked (usually under a minute)."
         )

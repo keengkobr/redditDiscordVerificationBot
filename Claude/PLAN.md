@@ -1,5 +1,15 @@
 # Discord Verification Bot — Project Plan
 
+> **Update (this branch):** Reddit now requires new integrations to go through Devvit
+> rather than registering a classic script-app OAuth client, so the Reddit-side
+> pieces described below (PRAW, `reddit_poller.py`, inbox polling) have been
+> replaced per [DEVVIT_PIVOT_SPEC.md](DEVVIT_PIVOT_SPEC.md). Sections 4, 5, 9, and
+> 11 below are unaffected — same thresholds, same DB schema, same abuse
+> prevention, same hidden-profile mitigation, just resolved via the Devvit app
+> instead of PRAW. Sections 6, 7 (Phase 1), and 10 are superseded where noted.
+> The PRAW path is parked, not deleted — see the `main`/`channelLogging`
+> branches if it's ever revived.
+
 ## 1. Goal
 
 Gate access to the Discord server behind proof of meaningful, active membership in the subreddit. Block burner/fresh Reddit accounts. Keep the user-facing flow low-friction (buttons + DMs, no slash commands or manual code-pasting into public threads). Leave room to grow the bot into general-purpose community tooling (roles, moderation, chat utilities) without a rewrite.
@@ -79,9 +89,10 @@ CREATE INDEX idx_code ON verifications(code);
 | Component | Choice | Why |
 |---|---|---|
 | Discord bot framework | discord.py (2.x) | Mature, supports buttons/views + slash commands if needed later |
-| Reddit API wrapper | PRAW | Standard, handles OAuth/rate-limiting for you |
+| Reddit integration | ~~PRAW~~ Devvit app (TypeScript, "Devvit Web": React + Hono + tRPC) | Reddit requires new integrations to go through Devvit — see DEVVIT_PIVOT_SPEC.md |
+| Reddit↔VPS hand-off | Webhook (`webhook_receiver.py`, FastAPI) over HTTPS, shared-secret auth | Devvit apps can't reach the VPS's SQLite file directly; this replaces inbox polling |
 | Database | SQLite (sqlite3 / aiosqlite) | Zero-config, plenty for this scale; migrate to Postgres only if the server gets very large |
-| Hosting | Single Linux VPS (Hetzner CX22 or DigitalOcean droplet) | ~$5-6/mo, runs both processes comfortably |
+| Hosting | Single Linux VPS (Hetzner CX22 or DigitalOcean droplet) | ~$5-6/mo, runs `discord_bot.py` + `webhook_receiver.py`; now also needs a domain + TLS (nginx/certbot) for the webhook, which v1 of this plan didn't require |
 | Process management | systemd services (or pm2/supervisord) | Auto-restart on crash/reboot |
 
 ---
@@ -89,13 +100,14 @@ CREATE INDEX idx_code ON verifications(code);
 ## 7. Feature Roadmap
 
 ### Phase 1 — Core Verification (MVP)
-- [ ] Reddit API app registration + OAuth credentials (2-4 week manual approval — start this immediately)
-- [ ] Make the Reddit bot account a **moderator** of the subreddit (needed for the 28-day content-visibility carveout — see Section 11)
-- [ ] `discord_bot.py`: `#verify-here` channel, button, DM flow, role assignment
-- [ ] `reddit_poller.py`: inbox polling, code matching, threshold checks
-- [ ] Shared SQLite schema + one-account-per-user enforcement
-- [ ] Plain-language pass/fail DMs
-- [ ] Mod review channel for manual overrides (also the fallback path for hidden-profile false negatives)
+- [x] ~~Reddit API app registration + OAuth credentials~~ Superseded: Devvit app install is immediate, no multi-week approval queue (confirmed) — see DEVVIT_PIVOT_SPEC.md
+- [x] Install the Devvit app on the subreddit with **moderator** scope (replaces "make the bot account a moderator" — same 28-day content-visibility rationale, see Section 11)
+- [x] `discord_bot.py`: `#verify-here` channel, button, DM flow, role assignment
+- [x] ~~`reddit_poller.py`: inbox polling, code matching, threshold checks~~ Retired — replaced by the Devvit app's form-submit handler + `webhook_receiver.py`
+- [x] Shared SQLite schema + one-account-per-user enforcement
+- [x] Plain-language pass/fail DMs
+- [x] Mod review channel for manual overrides (also the fallback path for hidden-profile false negatives)
+- [ ] Domain + TLS (nginx/certbot) in front of `webhook_receiver.py` — new prerequisite this pivot introduces, not needed by the original PRAW design
 
 ### Phase 2 — Role & Server Management
 - [ ] Additional self-serve roles (interest/topic roles via reaction or button menus)
@@ -138,12 +150,13 @@ CREATE INDEX idx_code ON verifications(code);
 
 ## 10. Open Decisions / Next Steps
 
-1. Register the Reddit API app now — it's the longest lead-time item (2-4 week approval).
-2. Decide final threshold values (Section 4) — can be adjusted post-launch based on false positives.
+1. ~~Register the Reddit API app now~~ Superseded — no comparable lead-time item exists for the Devvit path; app install is immediate. Remaining setup: point a domain at the VPS and get a TLS cert (see DEVVIT_PIVOT_SPEC.md prerequisites).
+2. Decide final threshold values (Section 4) — can be adjusted post-launch based on false positives. Now set as Devvit app settings, not `.env` — see DEVVIT_PIVOT_SPEC.md.
 3. Pick a VPS provider (Hetzner/DigitalOcean/Oracle free tier) and provision it.
 4. Decide Phase 4 AI scope (if any) before estimating that cost bucket further.
 5. Build the MVP (Phase 1) as the first working prototype.
 6. Test the "hidden profile" edge case (Section 11) directly with a mod-account vs non-mod-account before launch.
+7. Confirm the mod-gated subreddit-karma call (`user.getUserKarmaFromCurrentSubreddit()`) actually requires moderator status for a user *other than* whoever's testing it — the spike so far only proved it works, not that the mod-gating itself is real (the tester and the mod were the same account). See DEVVIT_PIVOT_SPEC.md "Confirmed via spike" section. Overlaps with item 6 above and can likely be tested together.
 
 ---
 

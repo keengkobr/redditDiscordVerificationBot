@@ -1,0 +1,84 @@
+{
+  "$schema": "https://developers.reddit.com/schema/config-file.v1.json",
+  "name": "verify-for-discord",
+  "post": {
+    "dir": "dist/client",
+    "entrypoints": {
+      "default": {
+        "inline": true,
+        "entry": "splash.html"
+      }
+    }
+  },
+  "media": {
+    "dir": "public"
+  },
+  "server": {
+    "dir": "dist/server",
+    "entry": "index.cjs"
+  },
+  "menu": {
+    "items": [
+      {
+        "label": "Create Verify for Discord post",
+        "description": "(Re)creates the pinned verification post for this subreddit",
+        "location": "subreddit",
+        "forUserType": "moderator",
+        "endpoint": "/internal/menu/post-create"
+      }
+    ]
+  },
+  "permissions": {
+    "reddit": {
+      "enable": true,
+      "scope": "moderator"
+    },
+    "http": {
+      "enable": true,
+      "domains": ["verify.yourdomain.com"]
+    }
+  },
+  "settings": {
+    "global": {
+      "webhookUrl": {
+        "type": "string",
+        "label": "Verification webhook URL",
+        "helpText": "The VPS webhook_receiver.py endpoint, e.g. https://verify.yourdomain.com/devvit/verdict",
+        "placeholder": "https://verify.yourdomain.com/devvit/verdict"
+      },
+      "webhookSecret": {
+        "type": "string",
+        "label": "Verification webhook shared secret",
+        "helpText": "Must match DEVVIT_WEBHOOK_SECRET in the VPS .env",
+        "isSecret": true
+      },
+      "minAccountAgeDays": {
+        "type": "number",
+        "label": "Minimum account age (days)",
+        "defaultValue": 30
+      },
+      "minTotalKarma": {
+        "type": "number",
+        "label": "Minimum total karma",
+        "defaultValue": 100
+      },
+      "minSubredditActivityCount": {
+        "type": "number",
+        "label": "Minimum subreddit post/comment count",
+        "defaultValue": 5
+      },
+      "minSubredditKarma": {
+        "type": "number",
+        "label": "Minimum subreddit karma",
+        "defaultValue": 20
+      }
+    }
+  },
+  "triggers": {
+    "onAppInstall": "/internal/triggers/on-app-install"
+  },
+  "scripts": {
+    "dev": "vite build --watch",
+    "build": "vite build"
+  }
+}
