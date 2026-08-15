@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Verify for Discord — Privacy Policy</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 40em; margin: 3em auto; padding: 0 1em; line-height: 1.6; }
+  h1, h2 { line-height: 1.3; }
+</style>
+</head>
+<body>
+<h1>Privacy Policy</h1>
+<p><em>Last updated: 2026-08-15</em></p>
+
+<p>"Verify for Discord" ("the app") is a Reddit app used to check whether a Reddit
+account meets basic activity requirements (account age, karma, and participation
+in a specific subreddit) before granting that user a role in an associated
+Discord server. This page explains what data the app accesses and what it does
+with it.</p>
+
+<h2>What the app accesses</h2>
+<p>When you submit the verification form, the app reads publicly-available
+information about your Reddit account through Reddit's own platform (Devvit):</p>
+<ul>
+  <li>Your Reddit username</li>
+  <li>Your account creation date</li>
+  <li>Your total link and comment karma</li>
+  <li>Your post/comment history and karma within the specific subreddit running this app</li>
+</ul>
+<p>The app never sees your Reddit password, private messages, or any content
+outside the subreddit it's installed in. It does not read or post on your
+behalf.</p>
+
+<h2>What the app does with that data</h2>
+<p>The app computes a pass/fail result from the data above against a fixed set
+of thresholds (e.g. minimum account age, minimum karma). It then sends the
+following to the Discord server operator's own server, over an encrypted
+connection, so that server can decide whether to grant you a Discord role:</p>
+<ul>
+  <li>Your Reddit username</li>
+  <li>The pass/fail result and, if failed, which check(s) didn't meet the threshold</li>
+  <li>The raw numbers behind that result (account age, karma, subreddit activity)</li>
+</ul>
+<p>This is the only place your information is sent. It is not sold, shared with
+advertisers, or used for anything beyond this one-time eligibility check.</p>
+
+<h2>Data retention</h2>
+<p>The Discord server operator stores your Reddit username, the verification
+result, and a link between your Reddit account and your Discord account, for as
+long as needed to enforce one-Reddit-account-per-Discord-account and to
+maintain a record of past verification attempts. If you'd like this data
+removed, contact the moderators of the subreddit running this app, or message
+the app's maintainer on Reddit.</p>
+
+<h2>Third parties</h2>
+<p>This app runs on Reddit's Devvit platform, which is subject to
+<a href="https://www.redditinc.com/policies/privacy-policy">Reddit's own Privacy
+Policy</a>. Reading this app's policy does not replace or override Reddit's.</p>
+
+<h2>Contact</h2>
+<p>Questions about this policy or your data can be directed to the moderators of
+the subreddit where this app is installed.</p>
+</body>
+</html>
