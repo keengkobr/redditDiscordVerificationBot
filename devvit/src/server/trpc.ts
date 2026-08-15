@@ -86,12 +86,17 @@ export const appRouter = t.router({
           };
         }
 
+        // metrics/thresholds returned so the client can render the same
+        // requirements checklist Discord DMs show -- one consistent story
+        // whether you're looking at this page or your DMs.
         return {
           ok: true,
           passed,
           message: passed
             ? "Submitted! Check Discord in a moment — you're in."
             : "Submitted. If this doesn't look right, you'll get a DM with next steps.",
+          metrics,
+          thresholds,
         };
       }),
   }),

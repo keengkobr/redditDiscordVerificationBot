@@ -1,38 +1,84 @@
 import './index.css';
 
-import { navigateTo, context } from '@devvit/web/client';
+import { context } from '@devvit/web/client';
 import { StrictMode, useState } from 'react';
 import type { FormEvent } from 'react';
 import { createRoot } from 'react-dom/client';
 import { trpc } from './trpc';
+import type { inferRouterOutputs } from '@trpc/server';
+import type { AppRouter } from '../server/trpc';
+
+type SubmitResult = inferRouterOutputs<AppRouter>['verify']['submit'];
+
+type Requirement = {
+  label: string;
+  value: number;
+  threshold: number;
+  unit: string;
+  met: boolean;
+};
+
+function buildRequirements(
+  metrics: NonNullable<SubmitResult['metrics']>,
+  thresholds: NonNullable<SubmitResult['thresholds']>
+): Requirement[] {
+  const rows: Array<[string, number, number, string]> = [
+    ['Account age', metrics.accountAgeDays, thresholds.minAccountAgeDays, ' days'],
+    ['Total karma', metrics.totalKarma, thresholds.minTotalKarma, ''],
+    [
+      'Subreddit activity',
+      metrics.subredditActivityCount,
+      thresholds.minSubredditActivityCount,
+      ' posts/comments',
+    ],
+    ['Subreddit karma', metrics.subredditKarma, thresholds.minSubredditKarma, ''],
+  ];
+  return rows.map(([label, value, threshold, unit]) => ({
+    label,
+    value,
+    threshold,
+    unit,
+    met: value >= threshold,
+  }));
+}
 
 export const Splash = () => {
   const [code, setCode] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
+  const [result, setResult] = useState<SubmitResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (!code.trim()) return;
     setSubmitting(true);
-    setMessage(null);
+    setResult(null);
+    setError(null);
     try {
-      const result = await trpc.verify.submit.mutate({ code: code.trim() });
-      setMessage(result.message);
+      const response = await trpc.verify.submit.mutate({ code: code.trim() });
+      setResult(response);
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : 'Something went wrong -- try again.');
+      setError(err instanceof Error ? err.message : 'Something went wrong -- try again.');
     } finally {
       setSubmitting(false);
     }
   };
 
+  const requirements =
+    result?.metrics && result.thresholds ? buildRequirements(result.metrics, result.thresholds) : null;
+
+  // Color story matches the Discord DMs: green passed, amber "submitted but
+  // didn't meet requirements" (you'll still get a DM with details), red error.
+  const resultTone = error ? 'error' : result?.passed ? 'pass' : result ? 'fail' : null;
+  const toneStyles = {
+    pass: 'border-green-500 bg-green-50 dark:bg-green-950/40',
+    fail: 'border-amber-500 bg-amber-50 dark:bg-amber-950/40',
+    error: 'border-red-500 bg-red-50 dark:bg-red-950/40',
+  } as const;
+
   return (
     <div className="relative flex min-h-screen flex-col items-center justify-center gap-4 bg-white p-4 dark:bg-gray-900">
-      <img
-        className="mx-auto w-1/2 max-w-[160px] object-contain"
-        src="/snoo.png"
-        alt="Snoo"
-      />
+      <img className="mx-auto w-1/2 max-w-[160px] object-contain" src="/snoo.png" alt="Snoo" />
       <div className="flex flex-col items-center gap-2 text-center">
         <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Verify for Discord</h1>
         <p className="max-w-sm text-base text-gray-600 dark:text-gray-300">
@@ -40,7 +86,7 @@ export const Splash = () => {
           your accounts.
         </p>
       </div>
-      <form onSubmit={submit} className="flex flex-col items-center gap-2">
+      <form onSubmit={submit} className="flex w-full max-w-xs flex-col items-center gap-2">
         <input
           className="w-48 rounded border border-gray-300 px-3 py-2 text-center text-black"
           value={code}
@@ -57,20 +103,26 @@ export const Splash = () => {
         >
           {submitting ? 'Checking…' : 'Verify'}
         </button>
-        {message && (
-          <p className="max-w-sm text-center text-sm text-gray-700 dark:text-gray-300" role="status">
-            {message}
-          </p>
+
+        {resultTone && (
+          <div
+            role="status"
+            className={`w-full rounded-lg border-2 p-3 text-center text-sm text-gray-800 dark:text-gray-100 ${toneStyles[resultTone]}`}
+          >
+            <p className="font-medium">{error ?? result?.message}</p>
+            {requirements && (
+              <ul className="mt-2 flex flex-col gap-1 text-left text-xs">
+                {requirements.map((r) => (
+                  <li key={r.label}>
+                    {r.met ? '✅' : '❌'} <strong>{r.label}</strong> — {r.value}
+                    {r.unit} <em>(need {r.threshold}{r.unit}+)</em>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         )}
       </form>
-      <footer className="absolute bottom-4 left-1/2 flex -translate-x-1/2 gap-3 text-[0.8em] text-gray-600 dark:text-gray-400">
-        <button
-          className="cursor-pointer hover:text-gray-900 dark:hover:text-white transition-colors"
-          onClick={() => navigateTo('https://developers.reddit.com/docs')}
-        >
-          Docs
-        </button>
-      </footer>
     </div>
   );
 };
