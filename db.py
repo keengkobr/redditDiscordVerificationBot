@@ -29,18 +29,26 @@ CREATE TABLE IF NOT EXISTS verifications (
     total_karma INTEGER,
     subreddit_activity_count INTEGER,
     subreddit_karma INTEGER,
-    logged_to_discord INTEGER DEFAULT 0,
-    UNIQUE(reddit_username)
+    logged_to_discord INTEGER DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_discord_user ON verifications(discord_user_id);
 CREATE INDEX IF NOT EXISTS idx_code ON verifications(code);
 CREATE INDEX IF NOT EXISTS idx_status_processed ON verifications(status, processed_at);
 """
-# idx_status_logged is created in _migrate(), not here: on an existing (pre-this-feature)
-# database the logged_to_discord column doesn't exist until _migrate() adds it, and this
-# script runs via executescript() *before* _migrate() — an index on that column here would
-# fail with "no such column" on any already-deployed verify.db.
+# idx_status_logged and idx_unique_verified_reddit_username are created in _migrate(),
+# not here: on an existing (pre-this-feature) database the logged_to_discord column
+# doesn't exist until _migrate() adds it, and this script runs via executescript()
+# *before* _migrate() — referencing that column here would fail with "no such column"
+# on any already-deployed verify.db.
+#
+# The reddit_username uniqueness constraint is a PARTIAL index scoped to
+# status='verified', not a table-wide UNIQUE(reddit_username) column constraint.
+# One Reddit account per Discord account (PLAN.md Section 5) only needs to hold
+# among *active, verified* claims -- a table-wide constraint also blocked writing
+# a second 'failed' row for a username that's verified elsewhere (or even two
+# 'failed' rows sharing a username), which raised IntegrityError on a legitimate,
+# expected case: a user retrying verification with the same Reddit account.
 
 # Columns added after the initial release. Applied via PRAGMA-checked ALTER TABLE
 # so existing verify.db files on already-deployed VPSes upgrade in place — the
@@ -62,12 +70,42 @@ def connect(db_path: str) -> sqlite3.Connection:
     return conn
 
 
+def _has_table_wide_reddit_username_unique(conn: sqlite3.Connection) -> bool:
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='verifications'"
+    ).fetchone()
+    return bool(row and row["sql"] and "UNIQUE(reddit_username)" in row["sql"].replace(" ", "")
+                .replace("\n", ""))
+
+
+def _rebuild_table_without_column_unique(conn: sqlite3.Connection) -> None:
+    """SQLite can't ALTER TABLE to drop a column-level UNIQUE constraint --
+    only a full rebuild does it. Only reached for a verify.db created before
+    this fix; new databases never hit this path (see SCHEMA above).
+    """
+    conn.execute("ALTER TABLE verifications RENAME TO verifications_old")
+    conn.executescript(SCHEMA)
+    columns = [row["name"] for row in conn.execute("PRAGMA table_info(verifications_old)")]
+    common = ", ".join(c for c in columns if c != "id")
+    conn.execute(
+        f"INSERT INTO verifications (id, {common}) SELECT id, {common} FROM verifications_old"
+    )
+    conn.execute("DROP TABLE verifications_old")
+
+
 def _migrate(conn: sqlite3.Connection) -> None:
+    if _has_table_wide_reddit_username_unique(conn):
+        _rebuild_table_without_column_unique(conn)
+
     existing = {row["name"] for row in conn.execute("PRAGMA table_info(verifications)")}
     for column, declaration in _MIGRATION_COLUMNS.items():
         if column not in existing:
             conn.execute(f"ALTER TABLE verifications ADD COLUMN {column} {declaration}")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_status_logged ON verifications(status, logged_to_discord)")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_verified_reddit_username "
+        "ON verifications(reddit_username) WHERE status = 'verified'"
+    )
 
 
 def init_db(db_path: str) -> None:
