@@ -300,11 +300,32 @@ Done:
   before being retired — not abandoned due to a bug, but due to Reddit's
   policy on personal domains making it a dead end regardless of how well it
   worked.
+- **The Discord-webhook relay ran live, start to finish, for real.** Clicked
+  Verify in Discord → DM → dev-subreddit post → submitted → Devvit's
+  `postVerdict()` POSTed to the real Discord webhook → `discord_bot.py`'s
+  `on_message` handler received it (`relay: processed verdict for code
+  'SSMFBU'`) → the existing poll loop picked up the row and sent the correct
+  fail DM (`subreddit_activity:1<5;subreddit_karma:1<20` — an empty dev
+  subreddit correctly failing, not a bug) → the verification-log-channel
+  embed posted. Two real, live bugs found and fixed along the way, both
+  Discord-permission issues rather than logic bugs:
+  - Discord rejects webhook names containing the substring "discord"
+    (anti-impersonation rule) — `RELAY_WEBHOOK_NAME` renamed.
+  - Python block-buffers `print()` under systemd (stdout isn't a tty), so
+    our own log lines — including the relay webhook's URL — were silently
+    getting lost on process restarts, while `discord.py`'s own
+    `logging`-module output kept showing up fine. Fixed with
+    `Environment=PYTHONUNBUFFERED=1` in `discord_bot.service`. This means
+    some of the earlier "silent failures" during this debugging session may
+    have been silently-lost successes, not actual errors — worth remembering
+    if something seems to work differently than an old log suggested.
+  - (Also needed, same category as the earlier `#verify-here` fixes: the
+    verification-log channel needed its own explicit `Send Messages`/`Embed
+    Links` overwrite for the bot's role — nothing is inherited by default.)
+  - The temporary metrics-logging line added to `trpc.ts` to work around the
+    domain block has been removed now that the real path works.
 
 Still open:
-- **The actual Discord-webhook relay has not yet been run live end-to-end.**
-  Code-level simulation passed; a real `devvit playtest` submission through
-  a real Discord webhook, read by a running `discord_bot.py`, has not.
 - **"Creates custom posts" app review** — no stated turnaround, blocks
   `devvit install` on the real subreddit (`Drueandgabe`), which blocks
   getting the real `DEVVIT_POST_URL`.

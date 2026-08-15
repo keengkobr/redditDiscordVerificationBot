@@ -67,12 +67,6 @@ export const appRouter = t.router({
         const thresholds = await getThresholds();
         const { passed, failReason } = evaluate(metrics, thresholds);
 
-        // TEMPORARY (PLAN.md Section 11 hidden-profile test) -- postVerdict()
-        // is expected to fail until the domain allowlist review clears, which
-        // would otherwise hide these numbers entirely. Remove once that's
-        // confirmed working, or once this test is done.
-        console.log('[verify.submit] metrics:', JSON.stringify({ username, metrics, passed, failReason }));
-
         try {
           await postVerdict({
             code: input.code,
