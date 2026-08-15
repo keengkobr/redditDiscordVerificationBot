@@ -198,10 +198,11 @@ RELAY_WEBHOOK_NAME = "Verification Relay"  # Discord rejects webhook names conta
 
 async def ensure_relay_webhook() -> None:
     """Finds or creates the Incoming Webhook the Devvit app POSTs verdicts to.
-    Only logs the full URL (which is itself the secret -- anyone with it can
-    post to this channel) the one time it's actually created; on later
-    restarts it just confirms the webhook still exists, without re-logging
-    the token into journalctl history repeatedly.
+    Logs the full URL every time (on creation and on later restarts alike) --
+    journalctl already requires sudo to read, the same privilege level as
+    .env itself, so there's no real security loss in not hiding it after the
+    first run; the earlier "only log once" version just made it awkward to
+    recover the URL if you missed it the first time.
     """
     global _relay_webhook_id
 
@@ -214,14 +215,14 @@ async def ensure_relay_webhook() -> None:
     existing = next((w for w in webhooks if w.name == RELAY_WEBHOOK_NAME), None)
     if existing:
         _relay_webhook_id = existing.id
-        print(f"[discord_bot] using existing relay webhook (id={existing.id})")
+        print(f"[discord_bot] using existing relay webhook (id={existing.id}), url:\n{existing.url}")
         return
 
     created = await channel.create_webhook(name=RELAY_WEBHOOK_NAME)
     _relay_webhook_id = created.id
     print(
         "[discord_bot] created relay webhook — copy this URL into the Devvit app's "
-        f"webhookUrl setting NOW, it will not be logged again:\n{created.url}"
+        f"webhookUrl setting:\n{created.url}"
     )
 
 
