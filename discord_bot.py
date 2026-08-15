@@ -246,6 +246,7 @@ async def on_interaction(interaction: discord.Interaction) -> None:
         return
 
     mod_channel = bot.get_channel(config.MOD_REVIEW_CHANNEL_ID)
+    posted_to_mods = False
     if mod_channel:
         embed = discord.Embed(
             title="🔎 Manual Review Requested",
@@ -256,9 +257,21 @@ async def on_interaction(interaction: discord.Interaction) -> None:
             embed.add_field(name="Reason", value=FAIL_REASON_TEXT[row["fail_reason"]], inline=False)
         else:
             embed.add_field(name="Requirements", value="\n".join(_requirement_lines(row)), inline=False)
-        await mod_channel.send(embed=embed)
+        try:
+            await mod_channel.send(embed=embed)
+            posted_to_mods = True
+        except discord.Forbidden:
+            # A permission gap in the mod channel shouldn't also silently eat
+            # the user's confirmation below -- tell them honestly instead of
+            # leaving the click looking like it did nothing.
+            print(f"[discord_bot] missing permission to post in MOD_REVIEW_CHANNEL_ID for verification_id={verification_id}")
 
-    await interaction.followup.send("Sent to the mod team — someone will follow up soon.", ephemeral=True)
+    await interaction.followup.send(
+        "Sent to the mod team — someone will follow up soon."
+        if posted_to_mods
+        else "Couldn't reach the mod-review channel — let a mod know directly for now.",
+        ephemeral=True,
+    )
     if interaction.message:
         try:
             await interaction.message.edit(view=None)
@@ -416,7 +429,14 @@ async def handle_result(row) -> None:
                     color=COLOR_SOFT_FAIL,
                 )
                 embed.add_field(name="Requirements", value="\n".join(_requirement_lines(row)), inline=False)
-                await mod_channel.send(embed=embed)
+                try:
+                    await mod_channel.send(embed=embed)
+                except discord.Forbidden:
+                    # Not fatal here (the user's own fail DM with a manual-review
+                    # button already went out above) -- but worth a clear log
+                    # line rather than a bare exception bubbling up to
+                    # process_results' generic catch-all.
+                    print(f"[discord_bot] missing permission to post soft-fail flag in MOD_REVIEW_CHANNEL_ID for id={row['id']}")
 
 
 # ---------------------------------------------------------------------------
