@@ -1,0 +1,8 @@
+.env
+verify.db
+verify.db-wal
+verify.db-shm
+__pycache__/
+*.pyc
+.venv/
+venv/

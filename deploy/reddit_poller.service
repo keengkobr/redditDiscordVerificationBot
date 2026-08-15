@@ -1,0 +1,16 @@
+[Unit]
+Description=Discord Verification Bot - reddit_poller.py
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=botuser
+WorkingDirectory=/opt/redditDiscordVerificationBot
+EnvironmentFile=/opt/redditDiscordVerificationBot/.env
+ExecStart=/opt/redditDiscordVerificationBot/.venv/bin/python reddit_poller.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

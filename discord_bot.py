@@ -1,0 +1,270 @@
+"""Process 1 (PLAN.md Section 2/3): the #verify-here channel, the Verify
+button, DMs, and role assignment. Also polls the shared DB for results the
+Reddit poller has written and acts on them (assign role / DM / mod alert).
+
+Never talks to reddit_poller.py directly — only through verify.db.
+"""
+
+import asyncio
+
+import discord
+from discord.ext import commands, tasks
+
+import config
+import db
+
+intents = discord.Intents.default()
+intents.members = True  # needed to look up members and assign roles
+
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+VERIFY_MESSAGE = (
+    "**Verify your Reddit account to unlock the rest of the server.**\n\n"
+    f"Requirements: a Reddit account that's been active in r/{config.SUBREDDIT_NAME} for a while — "
+    "not brand new, not a burner.\n\n"
+    "Click the button below. We'll DM you a one-tap Reddit link — tap it, hit **Send**, and you're "
+    "verified automatically within about a minute. No codes to type, nothing to post publicly."
+)
+
+FAIL_REASON_TEXT = {
+    "reddit_account_not_found": "we couldn't find that Reddit account.",
+    "code_expired": "the verification code expired before we received it — click Verify again to get a new one.",
+    "reddit_account_already_linked": "that Reddit account is already linked to a different Discord account.",
+    "no_visible_activity": (
+        f"we couldn't find visible activity in r/{config.SUBREDDIT_NAME} on that account. "
+        "This can happen if your profile is set to private/curated — we've flagged it for a mod to double check."
+    ),
+}
+
+
+def describe_fail_reason(fail_reason: str) -> str:
+    if fail_reason in FAIL_REASON_TEXT:
+        return FAIL_REASON_TEXT[fail_reason]
+    return f"your account didn't meet our activity requirements ({fail_reason})."
+
+
+# ---------------------------------------------------------------------------
+# DB helpers (sqlite3 is sync; run it off the event loop thread)
+# ---------------------------------------------------------------------------
+
+def _run_db_sync(fn, args):
+    conn = db.connect(config.DB_PATH)
+    try:
+        result = fn(conn, *args)
+        conn.commit()
+        return result
+    finally:
+        conn.close()
+
+
+async def run_db(fn, *args):
+    return await asyncio.to_thread(_run_db_sync, fn, args)
+
+
+# ---------------------------------------------------------------------------
+# Verify button
+# ---------------------------------------------------------------------------
+
+class VerifyView(discord.ui.View):
+    """Persistent view (survives bot restarts via custom_id)."""
+
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="Verify Reddit Account",
+        style=discord.ButtonStyle.primary,
+        custom_id="verify_button",
+    )
+    async def verify(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await handle_verify_click(interaction)
+
+
+async def handle_verify_click(interaction: discord.Interaction) -> None:
+    discord_user_id = str(interaction.user.id)
+    result = await run_db(
+        db.create_or_get_pending,
+        discord_user_id,
+        config.CODE_EXPIRY_MINUTES * 60,
+        config.CODE_COOLDOWN_SECONDS,
+    )
+
+    if result["state"] == "already_verified":
+        await interaction.response.send_message("You're already verified! ✅", ephemeral=True)
+        return
+
+    if result["state"] == "reused" and result.get("rate_limited"):
+        await interaction.response.send_message(
+            "You've already got a code waiting — check your DMs for the Reddit link.",
+            ephemeral=True,
+        )
+        return
+
+    code = result["code"]
+    reddit_link = (
+        f"https://www.reddit.com/message/compose/"
+        f"?to={config.REDDIT_USERNAME}&subject=verify&message={code}"
+    )
+
+    try:
+        await interaction.user.send(
+            "**Almost there!** Tap the link below, then just hit **Send** on Reddit — "
+            "don't edit the message text.\n\n"
+            f"{reddit_link}\n\n"
+            f"This code expires in {config.CODE_EXPIRY_MINUTES} minutes. "
+            "You'll get a DM here as soon as it's checked (usually under a minute)."
+        )
+        await interaction.response.send_message("Check your DMs! 📬", ephemeral=True)
+    except discord.Forbidden:
+        await interaction.response.send_message(
+            "I can't DM you — enable DMs from server members (Privacy Settings) and click Verify again.",
+            ephemeral=True,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Manual review request (from a fail DM)
+# ---------------------------------------------------------------------------
+
+class ManualReviewView(discord.ui.View):
+    """Not registered persistently on purpose: the button has no bound callback,
+    so clicks are handled by the raw on_interaction listener below via custom_id
+    parsing. That works even after a bot restart, since it needs no view cache.
+    """
+
+    def __init__(self, verification_id: int):
+        super().__init__(timeout=None)
+        self.add_item(
+            discord.ui.Button(
+                label="Request Manual Review",
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"request_review:{verification_id}",
+            )
+        )
+
+
+@bot.event
+async def on_interaction(interaction: discord.Interaction) -> None:
+    if interaction.type != discord.InteractionType.component:
+        return
+    custom_id = interaction.data.get("custom_id", "") if interaction.data else ""
+    if not custom_id.startswith("request_review:"):
+        return
+
+    verification_id = int(custom_id.split(":", 1)[1])
+    row = await run_db(db.get_verification_by_id, verification_id)
+    if not row:
+        await interaction.response.send_message(
+            "Couldn't find that verification record — try clicking Verify again.", ephemeral=True
+        )
+        return
+
+    mod_channel = bot.get_channel(config.MOD_REVIEW_CHANNEL_ID)
+    if mod_channel:
+        await mod_channel.send(
+            f"🔎 Manual review requested by <@{row['discord_user_id']}>\n"
+            f"Reddit username: u/{row['reddit_username'] or 'unknown'}\n"
+            f"Fail reason: `{row['fail_reason']}`"
+        )
+
+    await interaction.response.send_message("Sent to the mod team — someone will follow up soon.", ephemeral=True)
+    if interaction.message:
+        try:
+            await interaction.message.edit(view=None)
+        except discord.HTTPException:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Background: pick up results the poller has written
+# ---------------------------------------------------------------------------
+
+@tasks.loop(seconds=config.POLL_INTERVAL_SECONDS)
+async def process_results() -> None:
+    rows = await run_db(db.get_unprocessed_results)
+    for row in rows:
+        try:
+            await handle_result(row)
+        except Exception as exc:  # noqa: BLE001 - one bad row shouldn't stall the loop
+            print(f"[discord_bot] error handling result id={row['id']}: {exc}")
+        finally:
+            await run_db(db.mark_processed, row["id"])
+
+
+async def handle_result(row) -> None:
+    guild = bot.get_guild(config.DISCORD_GUILD_ID)
+    member = guild.get_member(int(row["discord_user_id"])) if guild else None
+
+    if row["status"] == "verified":
+        if member and config.VERIFIED_ROLE_ID:
+            role = guild.get_role(config.VERIFIED_ROLE_ID)
+            if role:
+                try:
+                    await member.add_roles(role, reason="Passed Reddit verification")
+                except discord.Forbidden:
+                    print(f"[discord_bot] missing permission to assign role to {row['discord_user_id']}")
+        try:
+            user = member or await bot.fetch_user(int(row["discord_user_id"]))
+            await user.send(f"✅ You're verified as u/{row['reddit_username']}! Welcome in.")
+        except discord.Forbidden:
+            pass
+
+    elif row["status"] == "failed":
+        reason_text = describe_fail_reason(row["fail_reason"])
+        try:
+            user = member or await bot.fetch_user(int(row["discord_user_id"]))
+            await user.send(
+                f"❌ Verification didn't pass: {reason_text}\n\n"
+                "If you think this is a mistake, request a manual review below.",
+                view=ManualReviewView(row["id"]),
+            )
+        except discord.Forbidden:
+            pass
+
+        # Soft-fail (Section 11): proactively flag possible hidden-profile cases
+        # for a mod even before the user asks.
+        if row["fail_reason"] == "no_visible_activity":
+            mod_channel = bot.get_channel(config.MOD_REVIEW_CHANNEL_ID)
+            if mod_channel:
+                await mod_channel.send(
+                    f"⚠️ Soft-fail (possible curated/hidden profile): <@{row['discord_user_id']}> "
+                    f"verified as u/{row['reddit_username']} but no visible "
+                    f"r/{config.SUBREDDIT_NAME} activity was found."
+                )
+
+
+# ---------------------------------------------------------------------------
+# Startup
+# ---------------------------------------------------------------------------
+
+async def ensure_verify_message() -> None:
+    channel = bot.get_channel(config.VERIFY_CHANNEL_ID)
+    if not channel:
+        print("[discord_bot] VERIFY_CHANNEL_ID not found — skipping pinned message setup")
+        return
+
+    pins = await channel.pins()
+    if any(msg.author == bot.user for msg in pins):
+        return  # Already posted on a previous run.
+
+    msg = await channel.send(VERIFY_MESSAGE, view=VerifyView())
+    await msg.pin()
+
+
+@bot.event
+async def on_ready() -> None:
+    print(f"[discord_bot] logged in as {bot.user}")
+    bot.add_view(VerifyView())
+    await ensure_verify_message()
+    if not process_results.is_running():
+        process_results.start()
+
+
+def main() -> None:
+    config.validate(require_discord=True)
+    db.init_db(config.DB_PATH)
+    bot.run(config.DISCORD_BOT_TOKEN)
+
+
+if __name__ == "__main__":
+    main()
