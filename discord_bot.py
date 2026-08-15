@@ -193,7 +193,7 @@ async def on_interaction(interaction: discord.Interaction) -> None:
 # Discord webhook relay (replaces webhook_receiver.py, DEVVIT_PIVOT_SPEC.md v4)
 # ---------------------------------------------------------------------------
 
-RELAY_WEBHOOK_NAME = "Verify for Discord relay"
+RELAY_WEBHOOK_NAME = "Verification Relay"  # Discord rejects webhook names containing "discord"
 
 
 async def ensure_relay_webhook() -> None:
