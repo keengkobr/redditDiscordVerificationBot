@@ -126,19 +126,50 @@ No scheduler, no cron, no inbox reading. Purely event-driven.
 5. **Real Reddit App Review — confirmed required, turnaround unknown.**
    Correcting an earlier note in this doc: `devvit playtest`/`devvit upload`
    against a throwaway dev subreddit (<200 subscribers) *is* immediate, no
-   review queue — that part of the earlier "confirmed moot" note was accurate
-   for that path. But installing on a real subreddit requires `devvit
-   publish`, and publish is gated by human review for any app that "creates
-   custom posts" (this one does — the pinned "Verify for Discord" post).
-   `devvit publish` submits the version and returns immediately with "You'll
-   receive an email when your app has been approved" — no turnaround estimate
-   given. This reintroduces exactly the kind of unknown-lead-time item PLAN.md
-   §10 originally flagged for the PRAW script-app registration (2-4 weeks) —
-   it didn't go away with the Devvit pivot, it just moved to a different gate
-   later in the process. Until approval lands, `devvit install <subreddit>`
-   cannot be run and the pinned post cannot be created on the real subreddit,
-   which blocks getting `DEVVIT_POST_URL` and therefore blocks starting
-   `discord_bot.py` for real (`config.validate()` requires it).
+   review queue for *installing the app itself* — that part of the earlier
+   "confirmed moot" note was accurate. But installing on a real subreddit
+   requires `devvit publish`, and publish is gated by human review for any
+   app that "creates custom posts" (this one does — the pinned "Verify for
+   Discord" post). `devvit publish` submits the version and returns
+   immediately with "You'll receive an email when your app has been
+   approved" — no turnaround estimate given. This reintroduces exactly the
+   kind of unknown-lead-time item PLAN.md §10 originally flagged for the PRAW
+   script-app registration (2-4 weeks) — it didn't go away with the Devvit
+   pivot, it just moved to a different gate later in the process. Until
+   approval lands, `devvit install <subreddit>` cannot be run and the pinned
+   post cannot be created on the real subreddit, which blocks getting
+   `DEVVIT_POST_URL` and therefore blocks starting `discord_bot.py` for real
+   (`config.validate()` requires it).
+6. **Correction, confirmed live: the `http` domain permission is its OWN,
+   separate review gate — distinct from the "creates custom posts" review in
+   item 5, and with an actual documented turnaround.** Per Reddit's own HTTP
+   Fetch docs: "Requested domains will be submitted for review when you
+   playtest or upload your app. Most domain requests are reviewed within
+   1–2 business days, though requests with policy ambiguity may take
+   longer." This was not expected — playtest/upload being review-free was
+   assumed to cover the whole app, including its `permissions.http.domains`
+   grant. It doesn't; domains get their own queue. Confirmed live: calling
+   `fetch()` to `verify.verificationforyou.com` from a playtest install fails
+   every time with
+   ```
+   Error: 7 PERMISSION_DENIED: grpc invocation failed with status 7;
+   HTTP request to domain: verify.verificationforyou.com is not allowed
+   ```
+   — reproduced identically after an explicit fresh `devvit upload` +
+   `devvit playtest` reinstall, ruling out staleness. Approved domains show up
+   at `https://developers.reddit.com/apps/verify-for-discord/developer-settings`
+   — check there for status rather than re-testing repeatedly. Also per the
+   docs: domain entries must be an exact hostname (no wildcards, no protocol,
+   no path) — `verify.verificationforyou.com` as configured is already
+   correctly formatted, so nothing to fix there.
+
+   Net effect on the "test the full pipeline in a dev subreddit while waiting
+   for review" plan (PLAN.md, this doc's Testing notes): it only works up
+   through the `fetch()` call until the *domain* review clears (likely
+   1-2 business days — separate from and probably faster than item 5's
+   custom-post review, which has no stated estimate). Identity resolution,
+   karma/history pulls, and threshold evaluation all run for real today; the
+   webhook leg specifically needs the domain approval first.
 
 ## `webhook_receiver.py` (VPS side) — implemented
 
@@ -302,10 +333,33 @@ Done (this branch):
   `devvit publish` would even run for an app using the `http` plugin.
 - `devvit publish` submitted successfully (version 0.0.2) — now pending human
   review (see Prerequisites #5 above).
+- `discord_bot.py` connected to the real Discord server and got as far as
+  posting/pinning the Verify message — required fixing real, live permission
+  gaps: the bot's own role (`RedditVerificationBot`) had **no channel-specific
+  overwrite at all** in `#verify-here`, so it inherited `@everyone`'s deny on
+  `send_messages`/`manage_messages`/`embed_links`. Also needed **Pin
+  Messages** specifically — Discord split pinning into its own permission bit
+  separate from the older "Manage Messages," which `msg.pin()` requires.
+- Ran the real flow against the dev subreddit (`r/verify_for_discor_dev`):
+  clicked Verify in Discord → got the DM → opened the post → submitted the
+  code. Confirmed live, for real, not just in the earlier spike:
+  `reddit.getCurrentUsername()`, `getUserByUsername()`, the metrics
+  computation, and `evaluate()` all ran successfully end to end. Only the
+  final step — `postVerdict()`'s `fetch()` to the VPS — is currently blocked,
+  and specifically by the review gate documented in Prerequisites #6, not by
+  a bug in this code.
 
-Still open:
-- **Reddit's review of the published app** — no ETA given, blocks everything
-  below until it clears.
+Still open — two separate review queues, not one:
+- **Domain allowlist review** (Prerequisites #6) — blocks `postVerdict()`'s
+  `fetch()` specifically. Documented turnaround: 1–2 business days typically.
+  Check `https://developers.reddit.com/apps/verify-for-discord/developer-settings`
+  for approval status.
+- **"Creates custom posts" app review** (Prerequisites #5) — blocks
+  `devvit install` on the real subreddit. No stated turnaround. Independent
+  of the domain review above; may resolve on a different timeline.
+  Everything else in the pipeline (Devvit identity/metrics side,
+  `discord_bot.py`'s Discord-side handling, `webhook_receiver.py` itself) is
+  now confirmed working independently of both queues.
 - Confirm `getUserKarmaFromCurrentSubreddit()`'s moderator-gating with a second,
   non-mod Reddit account (PLAN.md §10 item 7) — can likely be combined with the
   hidden-profile mod-vs-non-mod test (item 6) since both need a second test account.
@@ -313,5 +367,7 @@ Still open:
   triggers `onAppInstall` to create the pinned post — needed to get
   `DEVVIT_POST_URL` for the VPS `.env` and unblock starting `discord_bot.py`
   for real.
-- A full live run: real Discord user clicks Verify → DMs code + post link →
-  submits on Reddit → webhook → role assignment/DM → log-channel embed.
+- A full live run all the way through: real Discord user clicks Verify → DMs
+  code + post link → submits on Reddit → webhook → role assignment/DM →
+  log-channel embed. Blocked on the review gate above; everything before and
+  after that one gap is independently proven.
