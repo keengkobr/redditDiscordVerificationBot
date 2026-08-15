@@ -239,11 +239,16 @@ async def on_interaction(interaction: discord.Interaction) -> None:
 
     mod_channel = bot.get_channel(config.MOD_REVIEW_CHANNEL_ID)
     if mod_channel:
-        await mod_channel.send(
-            f"🔎 Manual review requested by <@{row['discord_user_id']}>\n"
-            f"Reddit username: u/{row['reddit_username'] or 'unknown'}\n"
-            f"Fail reason: `{row['fail_reason']}`"
+        embed = discord.Embed(
+            title="🔎 Manual Review Requested",
+            description=f"<@{row['discord_user_id']}> — u/{row['reddit_username'] or 'unknown'}",
+            color=COLOR_SOFT_FAIL,
         )
+        if row["fail_reason"] in FAIL_REASON_TEXT:
+            embed.add_field(name="Reason", value=FAIL_REASON_TEXT[row["fail_reason"]], inline=False)
+        else:
+            embed.add_field(name="Requirements", value="\n".join(_requirement_lines(row)), inline=False)
+        await mod_channel.send(embed=embed)
 
     await interaction.response.send_message("Sent to the mod team — someone will follow up soon.", ephemeral=True)
     if interaction.message:
@@ -395,11 +400,16 @@ async def handle_result(row) -> None:
         if row["fail_reason"] == "no_visible_activity":
             mod_channel = bot.get_channel(config.MOD_REVIEW_CHANNEL_ID)
             if mod_channel:
-                await mod_channel.send(
-                    f"⚠️ Soft-fail (possible curated/hidden profile): <@{row['discord_user_id']}> "
-                    f"verified as u/{row['reddit_username']} but no visible "
-                    f"r/{config.SUBREDDIT_NAME} activity was found."
+                embed = discord.Embed(
+                    title="⚠️ Possible Hidden Profile",
+                    description=(
+                        f"<@{row['discord_user_id']}> verified as **u/{row['reddit_username']}** "
+                        f"but no visible r/{config.SUBREDDIT_NAME} activity was found."
+                    ),
+                    color=COLOR_SOFT_FAIL,
                 )
+                embed.add_field(name="Requirements", value="\n".join(_requirement_lines(row)), inline=False)
+                await mod_channel.send(embed=embed)
 
 
 # ---------------------------------------------------------------------------
