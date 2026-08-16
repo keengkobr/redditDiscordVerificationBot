@@ -457,7 +457,7 @@ async def ensure_relay_webhook() -> None:
     _relay_webhook_id = created.id
     print(
         f"[discord_bot] created relay webhook (id={created.id}) — run "
-        "get_relay_webhook_url.py to retrieve its URL for the Devvit app's webhookUrl setting"
+        "get_relay_webhook_url.py to retrieve its URL for the Devvit app's discordWebhookUrl setting"
     )
 
 
@@ -483,10 +483,10 @@ async def on_message(message: discord.Message) -> None:
         # (Guards against someone posting arbitrary text in the relay channel.)
         # Logged (IDs only, never message content) since this exact silence
         # is otherwise indistinguishable from the webhook message never
-        # arriving at all -- e.g. Devvit's webhookUrl setting pointing at a
-        # different webhook than the one this process is actually using.
+        # arriving at all -- e.g. Devvit's discordWebhookUrl setting pointing
+        # at a different webhook than the one this process is actually using.
         if message.webhook_id is not None:
-            print(f"[discord_bot] relay: ignoring message from webhook_id={message.webhook_id} (expected {_relay_webhook_id}) -- check Devvit's webhookUrl setting")
+            print(f"[discord_bot] relay: ignoring message from webhook_id={message.webhook_id} (expected {_relay_webhook_id}) -- check Devvit's discordWebhookUrl setting")
         return
 
     try:

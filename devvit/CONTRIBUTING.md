@@ -47,7 +47,7 @@ npx devvit publish
 ```
 
 `devvit publish` is subject to Reddit's human review for any app that creates custom posts (this
-one does) before it can be installed anywhere with more than 200 members. Settings (webhookUrl and
+one does) before it can be installed anywhere with more than 200 members. Settings (discordWebhookUrl and
 the thresholds) are configured per-install after that, not via a CLI command -- see "Settings" below.
 
 ## Settings
@@ -60,12 +60,12 @@ each install's moderators set them via that subreddit's own Mod Tools -> Apps ->
 Discord -> Settings page.
 
 One consequence: subreddit-scoped string settings can't be marked `isSecret` (a Devvit schema
-limitation -- that flag only exists for global settings), so `webhookUrl` is **not masked** on
+limitation -- that flag only exists for global settings), so `discordWebhookUrl` is **not masked** on
 that settings page. Each subreddit's mods see their own value in plaintext, which is an accepted
 tradeoff for self-service multi-tenant setup -- it's their own credential, visible only to their
 own mods with settings access, never to anyone outside that subreddit.
 
-- `webhookUrl` — the full Discord Incoming Webhook URL, specific to that Discord server. Get it by
+- `discordWebhookUrl` — the full Discord Incoming Webhook URL, specific to that Discord server. Get it by
   running `get_relay_webhook_url.py` on that server's Discord bot host.
 - `minAccountAgeDays` — minimum account age, in days. Default 30.
 - `minTotalKarma` — minimum combined link + comment karma. Default 50.

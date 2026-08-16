@@ -30,13 +30,20 @@ export type VerdictPayload = {
 };
 
 export async function postVerdict(payload: VerdictPayload): Promise<void> {
-  const webhookUrl = await settings.get<string>('webhookUrl');
+  // Deliberately named discordWebhookUrl, not webhookUrl -- see
+  // DEVVIT_PIVOT_SPEC.md's "Settings key renamed" section for why. Short
+  // version: a stale value set under the old name while this was still a
+  // global setting permanently wins over any subreddit-scoped value with
+  // the same key, with no CLI way to delete it. Renaming sidesteps a
+  // platform limitation rather than fighting it.
+  const webhookUrl = await settings.get<string>('discordWebhookUrl');
 
   if (!webhookUrl) {
     throw new Error(
-      'webhookUrl is not configured -- a moderator needs to set it under this subreddit\'s ' +
-        'Mod Tools -> Apps -> Verify for Discord -> Settings (subreddit-scoped setting, not ' +
-        'the devvit CLI). Get the URL from get_relay_webhook_url.py on the Discord bot\'s host.'
+      'discordWebhookUrl is not configured -- a moderator needs to set it under this ' +
+        "subreddit's Mod Tools -> Apps -> Verify for Discord -> Settings (subreddit-scoped " +
+        'setting, not the devvit CLI). Get the URL from get_relay_webhook_url.py on the ' +
+        "Discord bot's host."
     );
   }
 

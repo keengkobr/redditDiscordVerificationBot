@@ -250,6 +250,43 @@ Consequences worth remembering:
   resolves against whichever scope a setting is declared under, using the current request's
   subreddit context automatically.
 
+## Settings key renamed: webhookUrl -> discordWebhookUrl (found via playtest)
+
+Discovered a real, undocumented platform limitation while playtesting the subreddit-scope move
+above: Devvit's settings-merge code (`@devvit/settings/SettingsClient.js`'s `getAll()`) spreads
+`installationSettings` (subreddit-scoped) first, then `appSettings` (global) second --
+
+```js
+return {
+  ...getSettingsValues(response.installationSettings.settings, ...),
+  ...getSettingsValues(response.appSettings.settings, ...),
+};
+```
+
+Object spread means a later key always wins. Any key that still has a stored *global* value
+unconditionally overwrites the same key's subreddit-scoped value, forever, regardless of what the
+current manifest declares. `webhookUrl` had exactly this problem: it was set as a global value
+early in this project (before the subreddit-scope move), and that stale value kept winning no
+matter what got saved on the new per-subreddit settings page -- confirmed by adding a temporary
+debug log of just the resolved webhook's ID (never the token), which kept reporting the old local
+dev webhook's ID no matter what was saved to the subreddit setting.
+
+There is no CLI delete/unset for a global setting (`devvit settings set` only creates/updates,
+confirmed via `--help`), and re-declaring the key as global just to overwrite it with an empty or
+placeholder value doesn't help either -- the key still exists in `appSettings.settings`, so it
+still wins the merge, just with different content (confirmed: setting it to a placeholder string
+made `postVerdict` fail trying to parse that string as a URL, not "webhookUrl is not configured").
+
+Fix: renamed the setting to `discordWebhookUrl` everywhere (manifest, `webhook.ts`, all docs). A
+key that was never set globally has nothing stored to win the merge, so the subreddit-scoped value
+comes through cleanly. This sidesteps the platform limitation rather than fighting it -- there may
+be a real way to clear a stale global value through Reddit/Devvit support channels, but renaming
+was faster and didn't require outside help.
+
+**If this project ever needs to rename another setting for a different reason, don't -- this
+specific rename was a one-time fix for stale data from before subreddit scope existed. A schema
+change alone (moving scope, changing type) does not retroactively clear old stored values.**
+
 ## Explicitly out of scope for this pass
 
 - Any change to the classic-PRAW-path decision -- still parked on the `channelLogging` branch.

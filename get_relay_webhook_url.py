@@ -4,7 +4,7 @@ terminal, and nowhere else.
 discord_bot.py deliberately never logs the full URL (it's a live credential
 -- journalctl history persists in backups/log shipping even though reading
 it directly needs sudo). Run this by hand whenever you actually need the
-URL, e.g. to fill in the Devvit app's `webhookUrl` setting. Its output goes
+URL, e.g. to fill in the Devvit app's `discordWebhookUrl` setting. Its output goes
 to your terminal's stdout only, not to any persistent log.
 
 Usage:
