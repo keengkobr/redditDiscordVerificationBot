@@ -78,7 +78,6 @@ export const Splash = () => {
 
   return (
     <div className="relative flex min-h-screen flex-col items-center justify-center gap-4 bg-white p-4 dark:bg-gray-900">
-      <img className="mx-auto w-1/2 max-w-[160px] object-contain" src="/snoo.png" alt="Snoo" />
       <div className="flex flex-col items-center gap-2 text-center">
         <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Verify for Discord</h1>
         <p className="max-w-sm text-base text-gray-600 dark:text-gray-300">
