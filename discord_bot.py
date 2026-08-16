@@ -310,8 +310,12 @@ async def send_code_dm(destination, discord_user_id: str, session: dict) -> None
     # long-pressing a message copies the message's whole rendered text, so
     # a code sitting inside an embed field would copy the entire embed
     # (title + description + field) instead of just the code. A standalone
-    # message means "copy text" grabs exactly and only the code.
-    await destination.send(f"```{code}```")
+    # message means "copy text" grabs exactly and only the code -- and
+    # deliberately no fenced-code-block backticks here either, since those
+    # are literal characters in the raw message text and would get copied
+    # right along with the code otherwise. No need for that styling anyway
+    # when the code is already the message's only content.
+    await destination.send(code)
 
 
 # ---------------------------------------------------------------------------
