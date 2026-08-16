@@ -66,7 +66,7 @@ Installing the app on your subreddit (as a moderator) auto-creates the pinned "V
 **Settings are per-subreddit, not global** (`devvit.json`'s `settings.subreddit`) — each subreddit installing this app configures its own copy, since each talks to a different Discord server. That means the `devvit settings set`/`list` CLI **doesn't apply here at all** (it's explicitly global-scope only). Instead, after installing, go to that subreddit's Mod Tools → Apps → Verify for Discord → Settings and fill in:
 
 - `discordWebhookUrl` — get this from `python3 get_relay_webhook_url.py` on that Discord server's bot host. Not masked on the settings page (a Devvit limitation for subreddit-scoped settings) — it's that subreddit's own credential, visible only to its own mods.
-- `minAccountAgeDays`, `minTotalKarma`, `minSubredditActivityCount`, `minSubredditKarma` — same page. Keep these matching the `MIN_*` values in that install's VPS `.env` by hand — those only drive the verification-log-channel embed's "needs N+" labels, not the actual pass/fail decision.
+- `subMinAccountAgeDays`, `subMinTotalKarma`, `subMinSubredditActivityCount`, `subMinSubredditKarma` — same page. Keep these matching the `MIN_*` values in that install's VPS `.env` by hand — those only drive the verification-log-channel embed's "needs N+" labels, not the actual pass/fail decision.
 
 ## Deploying the VPS side
 

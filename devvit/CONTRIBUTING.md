@@ -67,10 +67,10 @@ own mods with settings access, never to anyone outside that subreddit.
 
 - `discordWebhookUrl` — the full Discord Incoming Webhook URL, specific to that Discord server. Get it by
   running `get_relay_webhook_url.py` on that server's Discord bot host.
-- `minAccountAgeDays` — minimum account age, in days. Default 30.
-- `minTotalKarma` — minimum combined link + comment karma. Default 50.
-- `minSubredditActivityCount` — minimum post/comment count in this subreddit. Default 1.
-- `minSubredditKarma` — minimum karma earned in this subreddit. Default 50.
+- `subMinAccountAgeDays` — minimum account age, in days. Default 30.
+- `subMinTotalKarma` — minimum combined link + comment karma. Default 50.
+- `subMinSubredditActivityCount` — minimum post/comment count in this subreddit. Default 1.
+- `subMinSubredditKarma` — minimum karma earned in this subreddit. Default 50.
 
 For local dev/playtest, set these the same way -- on the dev subreddit's own Mod Tools -> Apps ->
 Settings page (`playtest` installs to `devvit.json`'s `dev.subreddit`), not via the CLI.

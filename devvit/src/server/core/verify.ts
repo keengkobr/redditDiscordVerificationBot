@@ -101,12 +101,21 @@ const DEFAULT_THRESHOLDS: Thresholds = {
 };
 
 export async function getThresholds(): Promise<Thresholds> {
+  // Setting keys prefixed "sub" (subMinAccountAgeDays etc.), not a bare
+  // "minAccountAgeDays" -- these thresholds were tuned repeatedly via
+  // `devvit settings set` back when they were still global-scope settings
+  // (see PLAN.md's threshold-tuning history), which left stale global
+  // values behind. Devvit's settings-merge always lets a global value win
+  // over a subreddit-scoped one with the same key, forever, with no CLI way
+  // to delete it (the exact bug found and fixed for webhookUrl -- see
+  // DEVVIT_PIVOT_SPEC.md's "Settings key renamed" section). Renamed these
+  // too, preemptively, rather than wait to rediscover the same bug.
   const [minAccountAgeDays, minTotalKarma, minSubredditActivityCount, minSubredditKarma] =
     await Promise.all([
-      settings.get<number>('minAccountAgeDays'),
-      settings.get<number>('minTotalKarma'),
-      settings.get<number>('minSubredditActivityCount'),
-      settings.get<number>('minSubredditKarma'),
+      settings.get<number>('subMinAccountAgeDays'),
+      settings.get<number>('subMinTotalKarma'),
+      settings.get<number>('subMinSubredditActivityCount'),
+      settings.get<number>('subMinSubredditKarma'),
     ]);
 
   return {

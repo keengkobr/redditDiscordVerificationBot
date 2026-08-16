@@ -287,6 +287,18 @@ was faster and didn't require outside help.
 specific rename was a one-time fix for stale data from before subreddit scope existed. A schema
 change alone (moving scope, changing type) does not retroactively clear old stored values.**
 
+## The four threshold settings got the same rename, preemptively
+
+`minAccountAgeDays`/`minTotalKarma`/`minSubredditActivityCount`/`minSubredditKarma` had the exact
+same exposure as `webhookUrl`: they were tuned repeatedly via `devvit settings set` back when they
+were still global-scope settings, during the original threshold-loosening pass documented in
+PLAN.md Section 4 (100/5/20 -> 30/50/1/50). Rather than wait to independently rediscover the same
+merge-order bug for these four, renamed them too -- `subMinAccountAgeDays`, `subMinTotalKarma`,
+`subMinSubredditActivityCount`, `subMinSubredditKarma` -- before ever testing whether the old names
+were actually still broken. (Given the identical exposure pattern, treating this as "very likely
+already broken" rather than waiting to confirm it was the right call -- confirming would have meant
+deliberately shipping a broken threshold to find out.)
+
 ## Known limitation: no "code expired" message on the Reddit side
 
 Submitting an expired/already-resolved code still shows the normal "Submitted. If this doesn't
