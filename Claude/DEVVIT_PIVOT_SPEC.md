@@ -313,6 +313,24 @@ extra code-length/complexity for what's considered an edge case (codes expire af
 most users complete the flow well within that). Accepted as-is. Revisit if this turns out to be a
 common support question in practice.
 
+## Future improvement: send thresholds back alongside metrics (not yet done)
+
+`discord_bot.py`'s per-requirement checklist (DMs, log channel) compares Devvit's raw metrics
+against the VPS's own `config.MIN_*` values (from `.env`) to decide each ✅/❌ -- not against
+whatever threshold Devvit actually used to produce the verdict, since the webhook payload only ever
+carries metrics, never the thresholds. This means the VPS `.env` and that install's Devvit
+subreddit settings (`subMinAccountAgeDays` etc.) have to be kept in sync by hand, or the checklist
+can show a checkmark that contradicts the overall pass/fail result sitting right above it.
+
+Not fixed now (Colby's call, 2026-08-16) -- but worth doing before/while extending this to run on
+multiple subreddits at once, since each subreddit can now set its own thresholds independently
+(see "Multi-tenant settings" above) and manual syncing gets more error-prone with more installs to
+track. The actual fix: add the four threshold values Devvit used to `VerdictPayload`
+(`verdict.py`/`webhook.ts`'s `VerdictPayload` type), so `_requirement_lines()` reads them straight
+from the verdict instead of from local config -- makes the checklist authoritative by construction,
+no manual sync required, and is a natural cleanup to bundle with any other multi-subreddit-support
+work rather than a standalone change.
+
 ## Explicitly out of scope for this pass
 
 - Any change to the classic-PRAW-path decision -- still parked on the `channelLogging` branch.

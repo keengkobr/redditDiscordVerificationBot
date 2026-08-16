@@ -60,7 +60,7 @@ No public thread posting, no OAuth server to host, no database anywhere.
 | Code expiry | 30 min | Prevents stale/shared codes |
 | One Reddit account per Discord account | enforced | Devvit's own Redis/KV, TTL'd at 30 days — see Section 5 |
 
-Started stricter (100/5/20 karma/activity/karma), loosened once real testing showed the original numbers were unnecessarily strict. These are **subreddit-scoped Devvit app settings** (set per-install via that subreddit's Mod Tools → Apps → Verify for Discord → Settings, not via `devvit settings set` — that CLI is global-only, and these moved to subreddit scope to support multiple communities each running their own Discord server), not `.env` — the VPS's own `MIN_*` env vars only drive the verification-log-channel embed's "needs N+" labels and must be kept matching by hand.
+Started stricter (100/5/20 karma/activity/karma), loosened once real testing showed the original numbers were unnecessarily strict. These are **subreddit-scoped Devvit app settings** (`subMinAccountAgeDays`, `subMinTotalKarma`, `subMinSubredditActivityCount`, `subMinSubredditKarma` — set per-install via that subreddit's Mod Tools → Apps → Verify for Discord → Settings, not via `devvit settings set`, which is global-only; the `sub` prefix and the move to subreddit scope both exist to support multiple communities each running their own Discord server, see DEVVIT_PIVOT_SPEC.md), not `.env` — the VPS's own `MIN_*` env vars only drive the verification-log-channel embed's "needs N+" labels and must be kept matching by hand (a real gap, not just cosmetic — see DEVVIT_PIVOT_SPEC.md's "Future improvement: send thresholds back alongside metrics").
 
 ---
 
@@ -153,11 +153,12 @@ Full rationale, the claim/match mechanism, and the dedup-write timing details li
 
 ## 10. Open Decisions / Next Steps
 
-1. **Reddit's "creates custom posts" app review** — the one remaining blocker before going live on the real subreddit. `devvit publish` is gated by human review for any app that creates custom posts (this one does — the pinned verification post), with no stated turnaround. The v5 rewrite means this needs a fresh submission (the previously-withdrawn v0.0.8 was pre-v5). Once approved: `devvit install <subreddit>` on the real subreddit, grab the real pinned post's URL, swap it into the VPS `.env`'s `DEVVIT_POST_URL`, restart `discord_bot`.
+1. **Reddit's "creates custom posts" app review** — the one remaining blocker before going live on the real subreddit. `devvit publish` is gated by human review for any app that creates custom posts (this one does — the pinned verification post), with no stated turnaround. The fully-tested v5 build was submitted for review on 2026-08-16 (withdrawn and resubmitted once already, to make sure the reviewed version matched the final tested code). Once approved: `devvit install <subreddit>` on the real subreddit, grab the real pinned post's URL, swap it into the VPS `.env`'s `DEVVIT_POST_URL`, restart `discord_bot`.
 2. **SOC2/persistence question, still unconfirmed in the abstract** — v5's no-database design is the strongest defensible position found without a database at all, but Reddit hasn't explicitly confirmed a fully stateless service falls outside the "external service connecting Reddit user data to external account data" trigger. Being resolved by letting Reddit's app review surface it rather than asking directly (see DEVVIT_PIVOT_SPEC.md's "Remaining open question").
-3. **Same-account-retry / dedup-KV-scope validation** — needs empirical confirmation in the dev subreddit before treated as fully settled (see DEVVIT_PIVOT_SPEC.md Section on "Anti-duplicate KV write timing").
-4. Pick a VPS provider (Hetzner/DigitalOcean/Oracle free tier) and provision it, if not already done.
-5. Decide Phase 4 AI scope (if any) before estimating that cost bucket further.
+3. ~~Same-account-retry / dedup-KV-scope validation~~ — **confirmed working**, tested live in the dev subreddit: unlinking and re-verifying the same Reddit account under the same Discord account went through instantly, while linking that same Reddit account to a different Discord account was correctly blocked (see DEVVIT_PIVOT_SPEC.md's "Anti-duplicate KV write timing").
+4. **Threshold-checklist authoritativeness** (not yet done) — the Discord-side per-requirement checklist reads its own local `.env` thresholds rather than what Devvit actually used, so the two need manual syncing per install or the checklist can visually contradict the verdict. Worth fixing before/while onboarding additional subreddits — see DEVVIT_PIVOT_SPEC.md's "Future improvement" note.
+5. Pick a VPS provider (Hetzner/DigitalOcean/Oracle free tier) and provision it, if not already done.
+6. Decide Phase 4 AI scope (if any) before estimating that cost bucket further.
 
 ---
 
