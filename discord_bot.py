@@ -293,10 +293,6 @@ async def send_code_dm(destination, discord_user_id: str, session: dict) -> None
         ),
         color=COLOR_INFO,
     )
-    # A fenced code block, not inline backticks -- renders as its own
-    # tappable/selectable block on both desktop and mobile, easier to
-    # grab in one motion than text buried inline in a sentence.
-    embed.add_field(name="Your code", value=f"```{code}```", inline=False)
     embed.set_footer(
         text=f"Expires in {config.CODE_EXPIRY_MINUTES} minutes — you'll get a DM here once it's checked."
     )
@@ -310,6 +306,12 @@ async def send_code_dm(destination, discord_user_id: str, session: dict) -> None
         )
     )
     await destination.send(embed=embed, view=link_view)
+    # The code is its own plain message, not an embed field -- on mobile,
+    # long-pressing a message copies the message's whole rendered text, so
+    # a code sitting inside an embed field would copy the entire embed
+    # (title + description + field) instead of just the code. A standalone
+    # message means "copy text" grabs exactly and only the code.
+    await destination.send(f"```{code}```")
 
 
 # ---------------------------------------------------------------------------
