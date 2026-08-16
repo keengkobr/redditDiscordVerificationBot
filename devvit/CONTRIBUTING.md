@@ -42,26 +42,38 @@ touching a real subreddit — anything under 200 subscribers skips review entire
 Once you're ready to install on a real subreddit:
 
 ```bash
-npx devvit settings set webhookUrl   # a Discord Incoming Webhook URL
-npm run deploy                        # type-check, lint, test, then devvit upload
+npm run deploy    # type-check, lint, test, then devvit upload
 npx devvit publish
 ```
 
 `devvit publish` is subject to Reddit's human review for any app that creates custom posts (this
-one does) before it can be installed anywhere with more than 200 members.
+one does) before it can be installed anywhere with more than 200 members. Settings (webhookUrl and
+the thresholds) are configured per-install after that, not via a CLI command -- see "Settings" below.
 
 ## Settings
 
-Set via `devvit settings set <key>`, not a `.env` file — these are stored by Devvit at the app
-level, shared across every subreddit the app is installed on.
+All settings are **subreddit-scoped** (`devvit.json`'s `settings.subreddit`), not global -- each
+subreddit that installs this app configures its own copy, since each one talks to a different
+Discord server. That also means the `devvit settings set`/`list` CLI commands **don't work for
+these at all** (that CLI is explicitly global-scope only, per `devvit settings --help`). Instead,
+each install's moderators set them via that subreddit's own Mod Tools -> Apps -> Verify for
+Discord -> Settings page.
 
-- `webhookUrl` (secret) — the full Discord Incoming Webhook URL. This is the only credential the
-  app needs; the URL itself is the secret, so nothing else needs to be configured for the
-  hand-off to work.
+One consequence: subreddit-scoped string settings can't be marked `isSecret` (a Devvit schema
+limitation -- that flag only exists for global settings), so `webhookUrl` is **not masked** on
+that settings page. Each subreddit's mods see their own value in plaintext, which is an accepted
+tradeoff for self-service multi-tenant setup -- it's their own credential, visible only to their
+own mods with settings access, never to anyone outside that subreddit.
+
+- `webhookUrl` — the full Discord Incoming Webhook URL, specific to that Discord server. Get it by
+  running `get_relay_webhook_url.py` on that server's Discord bot host.
 - `minAccountAgeDays` — minimum account age, in days. Default 30.
 - `minTotalKarma` — minimum combined link + comment karma. Default 50.
 - `minSubredditActivityCount` — minimum post/comment count in this subreddit. Default 1.
 - `minSubredditKarma` — minimum karma earned in this subreddit. Default 50.
+
+For local dev/playtest, set these the same way -- on the dev subreddit's own Mod Tools -> Apps ->
+Settings page (`playtest` installs to `devvit.json`'s `dev.subreddit`), not via the CLI.
 
 ## Permissions
 

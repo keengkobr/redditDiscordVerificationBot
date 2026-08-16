@@ -34,7 +34,9 @@ export async function postVerdict(payload: VerdictPayload): Promise<void> {
 
   if (!webhookUrl) {
     throw new Error(
-      'webhookUrl is not configured -- run `devvit settings set webhookUrl` with the Discord webhook URL from discord_bot.py\'s startup logs.'
+      'webhookUrl is not configured -- a moderator needs to set it under this subreddit\'s ' +
+        'Mod Tools -> Apps -> Verify for Discord -> Settings (subreddit-scoped setting, not ' +
+        'the devvit CLI). Get the URL from get_relay_webhook_url.py on the Discord bot\'s host.'
     );
   }
 

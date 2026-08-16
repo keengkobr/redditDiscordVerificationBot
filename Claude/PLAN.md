@@ -60,7 +60,7 @@ No public thread posting, no OAuth server to host, no database anywhere.
 | Code expiry | 30 min | Prevents stale/shared codes |
 | One Reddit account per Discord account | enforced | Devvit's own Redis/KV, TTL'd at 30 days — see Section 5 |
 
-Started stricter (100/5/20 karma/activity/karma), loosened once real testing showed the original numbers were unnecessarily strict. These are **Devvit app settings** (`devvit settings set minTotalKarma` etc.), not `.env` — the VPS's own `MIN_*` env vars only drive the verification-log-channel embed's "needs N+" labels and must be kept matching by hand.
+Started stricter (100/5/20 karma/activity/karma), loosened once real testing showed the original numbers were unnecessarily strict. These are **subreddit-scoped Devvit app settings** (set per-install via that subreddit's Mod Tools → Apps → Verify for Discord → Settings, not via `devvit settings set` — that CLI is global-only, and these moved to subreddit scope to support multiple communities each running their own Discord server), not `.env` — the VPS's own `MIN_*` env vars only drive the verification-log-channel embed's "needs N+" labels and must be kept matching by hand.
 
 ---
 

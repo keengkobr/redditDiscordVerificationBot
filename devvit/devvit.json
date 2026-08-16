@@ -41,12 +41,11 @@
     }
   },
   "settings": {
-    "global": {
+    "subreddit": {
       "webhookUrl": {
         "type": "string",
         "label": "Discord webhook URL",
-        "helpText": "The Discord Incoming Webhook discord_bot.py creates on the relay channel -- retrieve it by running get_relay_webhook_url.py on the VPS (never logged by discord_bot.py itself, since it's a live credential). This is the only credential needed now; the URL itself is the secret (personal/custom domains are never approved by Reddit's HTTP Fetch Policy, so this posts to discord.com instead of a self-hosted endpoint).",
-        "isSecret": true
+        "helpText": "The Discord Incoming Webhook your own Discord bot creates on its relay channel (run get_relay_webhook_url.py on your bot's host to retrieve it). This is the only credential this app needs, and it's specific to *your* Discord server -- each subreddit installing this app sets its own. Note this value is NOT masked on this settings page (a Devvit platform limitation for per-subreddit settings) -- keep it private the same way you would any other credential; anyone with this URL could post fake verification results into your server."
       },
       "minAccountAgeDays": {
         "type": "number",

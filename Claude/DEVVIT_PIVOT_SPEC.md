@@ -229,6 +229,27 @@ account data" trigger. Per Colby's decision, this isn't being escalated to Reddi
 design is the strongest, most defensible position achievable through architecture alone, and Reddit's
 own app review process is what will surface whether this specific point needs further changes.
 
+## Multi-tenant settings (post-playtest addition)
+
+Settings (`webhookUrl` + all four thresholds) moved from Devvit's `global` scope to `subreddit`
+scope in `devvit.json`, so each subreddit installing this app configures its own Discord webhook
+and its own thresholds instead of sharing one app-wide value across every install. This was always
+implicitly needed for "other subreddits can run this with their own Discord server" to actually
+work -- a single global `webhookUrl` meant every install shared one Discord destination, which
+only ever worked by accident for a single-subreddit deployment.
+
+Consequences worth remembering:
+- The `devvit settings set`/`list` CLI is explicitly global-scope only (per `devvit settings
+  --help`) -- it can no longer configure any of these at all. Each install's settings are now set
+  through that subreddit's own Mod Tools -> Apps -> Verify for Discord -> Settings page.
+- Subreddit-scoped string settings can't be marked `isSecret` (a Devvit schema limitation -- that
+  flag only exists for global settings), so `webhookUrl` is no longer masked on the settings page.
+  Accepted tradeoff: it's each subreddit's own credential, visible only to its own mods with
+  settings access, never to anyone outside that install.
+- No code changes needed in `verify.ts`/`webhook.ts` beyond the manifest change -- `settings.get()`
+  resolves against whichever scope a setting is declared under, using the current request's
+  subreddit context automatically.
+
 ## Explicitly out of scope for this pass
 
 - Any change to the classic-PRAW-path decision -- still parked on the `channelLogging` branch.
