@@ -34,10 +34,14 @@ Reddit, the app can see who they are the moment they open the post.
 2. Installing it automatically creates the pinned "Verify for Discord" post. If you ever need a
    fresh one, moderators can recreate it from the subreddit's mod menu ("Create Verify for
    Discord post").
-3. In the app's settings, paste in the Discord webhook URL your Discord bot gives you. This is
-   the one piece of setup that connects the two — without it, the app has nowhere to send results.
-4. Optionally adjust the minimum requirements (account age, karma, etc.) to whatever fits your
-   community. Sensible defaults are already filled in.
+3. From your subreddit, go to **Mod Tools → Apps → Verify for Discord → Settings** and paste in
+   the Discord webhook URL your Discord bot gives you. This is the one piece of setup that
+   connects the two — without it, the app has nowhere to send results. (One heads-up: this field
+   isn't hidden/masked like a password field would be — treat it as private anyway, since anyone
+   with it could post fake verification results into your server.)
+4. Optionally adjust the minimum requirements (account age, karma, etc.) on that same settings
+   page to whatever fits your community. Sensible defaults are already filled in. These settings
+   are specific to *your* subreddit — installing the app elsewhere doesn't share or affect them.
 
 That's it — from here, everything runs on its own.
 
