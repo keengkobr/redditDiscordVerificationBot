@@ -287,8 +287,8 @@ async def send_code_dm(destination, discord_user_id: str, session: dict) -> None
     embed = discord.Embed(
         title="📋 Almost there!",
         description=(
-            "**1.** Copy the code below\n"
-            "**2.** Click **Open Verification Post**\n"
+            "**1.** Tap and hold the code in the message right below this one, then **Copy**\n"
+            "**2.** Tap **Open Verification Post**\n"
             "**3.** Paste the code into the form and hit **Verify** on Reddit"
         ),
         color=COLOR_INFO,
@@ -306,6 +306,11 @@ async def send_code_dm(destination, discord_user_id: str, session: dict) -> None
         )
     )
     await destination.send(embed=embed, view=link_view)
+    # A short caption as its OWN message, separate from the code -- gives
+    # the code delivery some visual polish without touching the code
+    # message's own text (any styling there, even an emoji prefix, would
+    # get copied right along with the code -- see the note below).
+    await destination.send("👇 Your code:")
     # The code is its own plain message, not an embed field -- on mobile,
     # long-pressing a message copies the message's whole rendered text, so
     # a code sitting inside an embed field would copy the entire embed
