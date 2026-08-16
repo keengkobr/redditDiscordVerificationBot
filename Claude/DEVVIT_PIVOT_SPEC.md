@@ -287,6 +287,20 @@ was faster and didn't require outside help.
 specific rename was a one-time fix for stale data from before subreddit scope existed. A schema
 change alone (moving scope, changing type) does not retroactively clear old stored values.**
 
+## Known limitation: no "code expired" message on the Reddit side
+
+Submitting an expired/already-resolved code still shows the normal "Submitted. If this doesn't
+look right, you'll get a DM" message on Reddit -- Devvit has no way to know a code expired, since
+that's tracked entirely in the Discord bot's in-memory session (`CODE_TO_USER`/`SESSIONS`), never
+shared with Devvit at all. The bot silently discards the resulting verdict (logged as `no session
+found for code ... -- discarding`), so the user just never gets a DM and has no indication why.
+
+A real fix would mean packing a timestamp into the code alongside the claimed username + Discord
+ID, so Devvit could estimate elapsed time and warn before submitting -- rejected as not worth the
+extra code-length/complexity for what's considered an edge case (codes expire after 30 minutes;
+most users complete the flow well within that). Accepted as-is. Revisit if this turns out to be a
+common support question in practice.
+
 ## Explicitly out of scope for this pass
 
 - Any change to the classic-PRAW-path decision -- still parked on the `channelLogging` branch.
