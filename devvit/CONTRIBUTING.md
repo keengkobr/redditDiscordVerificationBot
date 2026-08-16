@@ -16,7 +16,7 @@ custom domain would.
 
 ## Layout
 
-- `src/client/splash.tsx` — the post UI: code input + Verify button.
+- `src/client/splash.tsx` — the post UI: code input + Verify button + pass/fail requirements checklist.
 - `src/server/trpc.ts` — the `verify.submit` mutation.
 - `src/server/core/verify.ts` — claim decoding, identity/karma/activity checks, threshold
   evaluation, and the Redis-backed anti-duplicate check.

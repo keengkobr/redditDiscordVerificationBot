@@ -6,18 +6,21 @@ then tells your Discord bot whether to let them in.
 ## What it does
 
 This app adds one pinned post to your subreddit, titled "Verify for Discord." When someone wants
-to join your Discord server, your Discord bot sends them here with a one-time code. They paste
-that code into the post and click Verify.
+to join your Discord server, their Discord bot asks which Reddit account is theirs, then sends
+them here with a one-time code. They paste that code into the post and click Verify.
 
 Behind the scenes, the app then:
 
-1. Checks how old their Reddit account is.
-2. Checks their total karma.
-3. Checks how much they've actually posted or commented in *your* subreddit, and how much karma
+1. Confirms the Reddit account they're actually logged into matches the one they told Discord.
+   If it doesn't, they're sent back to try again (up to a few times, then a moderator gets
+   pinged to sort it out by hand).
+2. Checks how old their Reddit account is.
+3. Checks their total karma.
+4. Checks how much they've actually posted or commented in *your* subreddit, and how much karma
    they've earned here specifically.
-4. Compares all of that against the minimums you've set (see "Settings" below).
-5. Sends a pass/fail result back to your Discord server, which handles everything from there —
-   giving them a role, sending them a message, and logging the attempt for your mods.
+5. Compares all of that against the minimums you've set (see "Settings" below).
+6. Sends a pass/fail result back to Discord, which handles everything from there — giving them a
+   role, sending them a message, and logging the attempt for your mods.
 
 Nobody has to log into anything separately or share a password — since they're already on
 Reddit, the app can see who they are the moment they open the post.
@@ -55,7 +58,13 @@ copy to keep in sync.
 
 ## A note on privacy
 
-This app never stores anything. It checks someone's Reddit account at the moment they click
-Verify, sends a plain "yes, this checks out" or "no, it doesn't" back to Discord, and forgets
-about it. It doesn't keep a list of who's tried, and it never hands your Discord server anyone's
-actual Reddit username — only whether the account they claimed matches and whether it passed.
+The app never hands your Discord server anyone's actual Reddit username — Discord already knows
+who claimed to be verifying (the user told it themselves), and the app only ever confirms whether
+that claim was real, never the other way around.
+
+The only thing it keeps a record of: once someone actually **passes**, it remembers "this Reddit
+account is linked to this Discord account" for 30 days, purely so the same Reddit account can't be
+used to unlock a second Discord account in the meantime. A failed attempt leaves no trace at all —
+someone who verifies against the wrong account by mistake can immediately try again with the right
+one, no waiting. Nothing about *how* someone did or didn't qualify (their age, karma, activity) is
+ever kept past the moment the result is sent to Discord.
