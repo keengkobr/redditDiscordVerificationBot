@@ -481,6 +481,12 @@ async def on_message(message: discord.Message) -> None:
     if message.webhook_id is None or message.webhook_id != _relay_webhook_id:
         # Not from the webhook we created for this exact purpose -- ignore.
         # (Guards against someone posting arbitrary text in the relay channel.)
+        # Logged (IDs only, never message content) since this exact silence
+        # is otherwise indistinguishable from the webhook message never
+        # arriving at all -- e.g. Devvit's webhookUrl setting pointing at a
+        # different webhook than the one this process is actually using.
+        if message.webhook_id is not None:
+            print(f"[discord_bot] relay: ignoring message from webhook_id={message.webhook_id} (expected {_relay_webhook_id}) -- check Devvit's webhookUrl setting")
         return
 
     try:
