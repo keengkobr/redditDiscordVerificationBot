@@ -66,6 +66,15 @@ CODE_COOLDOWN_SECONDS = _get_int("CODE_COOLDOWN_SECONDS", 60)
 # (user clicked Verify but never finished) so they don't accumulate forever.
 SESSION_SWEEP_INTERVAL_SECONDS = _get_int("SESSION_SWEEP_INTERVAL_SECONDS", 60)
 
+# --- Slash commands ---
+# Discord's command-sync endpoint has a much stricter rate limit than normal
+# API calls, and registered commands persist server-side regardless of the
+# bot process restarting -- so this should stay off by default and only be
+# flipped on (one run, then back off) after actually adding/changing a slash
+# command. Leaving it on by default caused a real outage during a run of
+# frequent restarts (each restart re-synced, eventually hit the rate limit).
+SYNC_SLASH_COMMANDS = os.getenv("SYNC_SLASH_COMMANDS", "").lower() in ("1", "true", "yes")
+
 
 def validate(require_discord: bool = False) -> None:
     """Fail fast with a clear message instead of a confusing library traceback."""

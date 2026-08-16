@@ -797,9 +797,18 @@ async def on_ready() -> None:
         bot.add_view(VerifyView())
         bot.add_view(ManualReviewView())
         _views_registered = True
-    await bot.tree.sync()
+    # Slash commands persist server-side once registered -- they don't need
+    # re-syncing on every restart, and Discord's command-sync endpoint has a
+    # much stricter rate limit than normal API calls (hit it for real during
+    # a run of frequent restarts, which then blocked ensure_verify_message()
+    # below since sync() used to run first and retry-with-backoff on 429).
+    # Opt-in via env var, and run it last so a slow/rate-limited sync can
+    # never block the startup steps that actually matter every time.
     await ensure_verify_message()
     await ensure_relay_webhook()
+    if config.SYNC_SLASH_COMMANDS:
+        await bot.tree.sync()
+        print("[discord_bot] synced slash commands")
     if not sweep_stale_sessions.is_running():
         sweep_stale_sessions.start()
 
