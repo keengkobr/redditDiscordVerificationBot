@@ -61,10 +61,28 @@ export const appRouter = t.router({
 
         const username = await reddit.getCurrentUsername();
         if (!username) {
+          // Reddit's own platform won't resolve an identity here for a few
+          // reasons -- a suspended/banned account is one (seen in practice:
+          // reddit.getCurrentUsername() came back empty for an account that
+          // turned out to be permanently banned), a genuine transient glitch
+          // is another. Can't tell which from this alone, so route it
+          // through the normal fail path (a real verdict, not just an inline
+          // message) rather than leaving the user stuck with no way forward
+          // and mods with zero visibility that this happened at all.
           console.error('[verify.submit] no username resolved from context');
+          try {
+            await postVerdict({
+              code: claim.shortId,
+              status: 'failed',
+              username_ok: true,
+              fail_reason: 'reddit_identity_unavailable',
+            });
+          } catch (err) {
+            console.error('[verify.submit] postVerdict failed:', err);
+          }
           return {
             ok: false,
-            message: "Couldn't verify your Reddit identity -- try again in a moment.",
+            message: "Couldn't verify your Reddit identity. You'll get a DM from Discord with next steps.",
           };
         }
 

@@ -74,6 +74,10 @@ FAIL_REASON_TEXT = {
     "reddit_account_not_found": "🔍 We couldn't find that Reddit account.",
     "reddit_account_already_linked": "🔗 That Reddit account is already linked to a different Discord account.",
     "username_mismatch": "🙅 Couldn't confirm the claimed Reddit account matched after 3 attempts.",
+    "reddit_identity_unavailable": (
+        "🚫 Reddit wouldn't confirm your identity — this can happen if the account is "
+        "suspended/banned, or from a temporary Reddit issue."
+    ),
 }
 
 NO_VISIBLE_ACTIVITY_NOTE = (
