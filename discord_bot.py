@@ -59,7 +59,7 @@ SESSIONS: dict[str, dict] = {}
 # Only holds entries for sessions currently in the "awaiting_verdict" stage.
 CODE_TO_USER: dict[str, str] = {}
 
-USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{3,20}$")
+USERNAME_RE = re.compile(r"^[A-Za-z0-9_-]{3,20}$")
 
 # --- Colors + shared formatting (used by the verify-here embed, DMs, and the
 # verification log channel alike, so all three read as one consistent style) ---
@@ -261,7 +261,7 @@ async def handle_username_reply(message: discord.Message, session: dict) -> None
     normalized = normalize_username(message.content)
     if not normalized:
         await message.channel.send(
-            "That doesn't look like a Reddit username — usually 3-20 letters/numbers/underscores, "
+            "That doesn't look like a Reddit username — usually 3-20 letters/numbers/underscores/hyphens, "
             "optionally starting with `u/`. Try again?"
         )
         return
