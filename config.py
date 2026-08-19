@@ -26,6 +26,17 @@ DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")
 DISCORD_GUILD_ID = _get_int("DISCORD_GUILD_ID", 0)
 VERIFY_CHANNEL_ID = _get_int("VERIFY_CHANNEL_ID", 0)
 MOD_REVIEW_CHANNEL_ID = _get_int("MOD_REVIEW_CHANNEL_ID", 0)
+# Where manual-review threads get created -- deliberately separate from
+# MOD_REVIEW_CHANNEL_ID (used for the two automatic/system soft-fail flags,
+# which need no user visibility at all). This one needs baseline View Channel
+# granted to whoever should be able to request a review (e.g. the Unverified
+# role), since Discord requires a user to have at least that much access to
+# the parent channel before they can be added to a private thread under it --
+# a role-wide grant on the *actual* mod channel would permanently expose
+# every future regular message there to every unverified member, which is
+# not what we want. Falls back to MOD_REVIEW_CHANNEL_ID if unset, so this
+# isn't a breaking change for an install that hasn't set up the new channel.
+MANUAL_REVIEW_CHANNEL_ID = _get_int("MANUAL_REVIEW_CHANNEL_ID", 0) or MOD_REVIEW_CHANNEL_ID
 VERIFIED_ROLE_ID = _get_int("VERIFIED_ROLE_ID", 0)
 # Applied by Discord's own member-verification gate to everyone who joins,
 # before this bot ever sees them. Removed on a pass so a verified member

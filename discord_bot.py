@@ -376,9 +376,9 @@ class ManualReviewModal(discord.ui.Modal, title="Request Manual Review"):
         # followup so a slow mod-channel send can't blow that window.
         await interaction.response.defer(ephemeral=True)
 
-        mod_channel = bot.get_channel(config.MOD_REVIEW_CHANNEL_ID)
+        review_channel = bot.get_channel(config.MANUAL_REVIEW_CHANNEL_ID)
         posted_to_mods = False
-        if mod_channel:
+        if review_channel:
             embed = discord.Embed(
                 title="🔎 Manual Review Requested",
                 description=await mention_with_name(interaction.user.id),
@@ -394,12 +394,17 @@ class ManualReviewModal(discord.ui.Modal, title="Request Manual Review"):
 
             try:
                 # A private thread -- not a public one -- so the requesting
-                # user (who generally can't see the mod-review channel at
-                # all) can still be added and actually participate. Needs
-                # the bot's role to have Create Private Threads granted in
-                # this channel; Manage Threads too, so mods automatically see
-                # it without needing to be individually added.
-                thread = await mod_channel.create_thread(
+                # user can still be added and actually participate. Created
+                # under MANUAL_REVIEW_CHANNEL_ID specifically, not the main
+                # mod-only channel: Discord requires a user to have at least
+                # baseline View Channel on the parent before they can be
+                # added to a private thread under it (confirmed live -- a
+                # 403 Missing Access otherwise), and granting that role-wide
+                # on the real mod channel would permanently expose every
+                # future regular message there to every unverified member.
+                # This channel exists specifically to have that baseline
+                # access granted safely -- see config.py's comment.
+                thread = await review_channel.create_thread(
                     name=f"Review — {interaction.user.display_name}",
                     type=discord.ChannelType.private_thread,
                     reason="Manual review requested",
@@ -418,9 +423,9 @@ class ManualReviewModal(discord.ui.Modal, title="Request Manual Review"):
                 # making this failure mode indistinguishable from working.
                 print(f"[discord_bot] manual review: create_thread/add_user/send failed for user={interaction.user.id}: {exc!r}")
                 try:
-                    await mod_channel.send(embed=embed)
+                    await review_channel.send(embed=embed)
                     posted_to_mods = True
-                    print(f"[discord_bot] manual review: fell back to flat embed in MOD_REVIEW_CHANNEL_ID for user={interaction.user.id}")
+                    print(f"[discord_bot] manual review: fell back to flat embed in MANUAL_REVIEW_CHANNEL_ID for user={interaction.user.id}")
                 except discord.HTTPException as exc2:
                     print(f"[discord_bot] manual review: fallback post also failed for user={interaction.user.id}: {exc2!r}")
 
