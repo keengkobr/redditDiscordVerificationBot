@@ -77,8 +77,8 @@ FAIL_REASON_TEXT = {
 }
 
 NO_VISIBLE_ACTIVITY_NOTE = (
-    "We couldn't find visible activity in this subreddit on your account — this can happen if "
-    "your profile is set to private/curated. We've flagged it for a mod to double check."
+    "We didn't find any posts or comments from you in this subreddit — we've flagged it for a "
+    "mod to double check."
 )
 
 
@@ -736,17 +736,22 @@ async def handle_result(row: dict) -> None:
         except discord.Forbidden:
             pass
 
-        # Soft-fail (Section 11): proactively flag possible hidden-profile cases
-        # for a mod even before the user asks.
+        # Soft-fail (Section 11): proactively flag no-activity cases for a mod
+        # even before the user asks. NOT necessarily a hidden/curated profile
+        # -- the app runs with moderator scope and already sees through those
+        # (28-day visibility window), so this genuinely means no detected
+        # activity, full stop. Could still be a hidden profile *older* than
+        # that window, or simply someone new to the subreddit -- a mod needs
+        # to look either way, hence still routed here rather than hard-failed.
         if row["fail_reason"] == "no_visible_activity":
             mod_channel = bot.get_channel(config.MOD_REVIEW_CHANNEL_ID)
             if mod_channel:
                 who = await mention_with_name(row["discord_user_id"])
                 embed = discord.Embed(
-                    title="⚠️ Possible Hidden Profile",
+                    title="⚠️ No Subreddit Activity Found",
                     description=(
                         f"{who} verified as **u/{row['reddit_username']}** "
-                        f"but no visible r/{config.SUBREDDIT_NAME} activity was found."
+                        f"but no r/{config.SUBREDDIT_NAME} activity was found."
                     ),
                     color=COLOR_SOFT_FAIL,
                 )
@@ -795,7 +800,7 @@ async def post_verification_log(row: dict) -> None:
             if row["fail_reason"] == "no_visible_activity":
                 color = COLOR_SOFT_FAIL
                 lines.append("")
-                lines.append("🔎 Possible curated/hidden profile — routed to mod review.")
+                lines.append("🔎 No subreddit activity found — routed to mod review.")
             description = f"{mention}\n" + "\n".join(lines)
 
         embed = discord.Embed(
