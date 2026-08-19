@@ -354,10 +354,10 @@ class ManualReviewModal(discord.ui.Modal, title="Request Manual Review"):
     """
 
     note = discord.ui.TextInput(
-        label="Why do you think this is a mistake? (optional)",
+        label="Why do you think this is a mistake?",
         style=discord.TextStyle.paragraph,
         placeholder="e.g. My profile is set to private, or I've been more active recently.",
-        required=False,
+        required=True,
         max_length=500,
     )
 
