@@ -401,7 +401,7 @@ class ManualReviewModal(discord.ui.Modal, title="Request Manual Review"):
                     reason="Manual review requested",
                 )
                 await thread.add_user(interaction.user)
-                ping = f"<@&{config.MOD_PING_ROLE_ID}>" if config.MOD_PING_ROLE_ID else None
+                ping = " ".join(f"<@&{role_id}>" for role_id in config.MOD_PING_ROLE_IDS) or None
                 await thread.send(content=ping, embed=embed, view=CloseThreadView())
                 posted_to_mods = True
             except discord.Forbidden:

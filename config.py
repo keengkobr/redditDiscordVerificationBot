@@ -16,6 +16,11 @@ def _get_int(name: str, default: int) -> int:
     return int(val) if val else default
 
 
+def _get_int_list(name: str) -> list[int]:
+    val = os.getenv(name, "")
+    return [int(part) for part in val.split(",") if part.strip()]
+
+
 # --- Discord ---
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")
 DISCORD_GUILD_ID = _get_int("DISCORD_GUILD_ID", 0)
@@ -26,9 +31,10 @@ VERIFIED_ROLE_ID = _get_int("VERIFIED_ROLE_ID", 0)
 # before this bot ever sees them. Removed on a pass so a verified member
 # doesn't end up holding both roles at once (DEVVIT_PIVOT_SPEC.md v5).
 UNVERIFIED_ROLE_ID = _get_int("UNVERIFIED_ROLE_ID", 0)
-# Pinged in the opening message of a manual-review thread. Optional -- blank
+# Pinged in the opening message of a manual-review thread -- comma-separated
+# if you want more than one role pinged (e.g. "111,222"). Optional -- blank
 # means no ping, mods just rely on channel/thread notifications.
-MOD_PING_ROLE_ID = _get_int("MOD_PING_ROLE_ID", 0)
+MOD_PING_ROLE_IDS = _get_int_list("MOD_PING_ROLE_IDS")
 VERIFICATION_LOG_CHANNEL_ID = _get_int("VERIFICATION_LOG_CHANNEL_ID", 0)
 # Hidden, bot-only channel discord_bot.py posts/reads a Discord Incoming
 # Webhook on -- the Devvit app's verdict hand-off (DEVVIT_PIVOT_SPEC.md v4).
