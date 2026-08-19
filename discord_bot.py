@@ -387,14 +387,32 @@ class ManualReviewModal(discord.ui.Modal, title="Request Manual Review"):
                     embed.add_field(name=field.name, value=field.value, inline=field.inline)
             if self.note.value:
                 embed.add_field(name="User's note", value=self.note.value, inline=False)
+
             try:
-                await mod_channel.send(embed=embed)
+                # A private thread -- not a public one -- so the requesting
+                # user (who generally can't see the mod-review channel at
+                # all) can still be added and actually participate. Needs
+                # the bot's role to have Create Private Threads granted in
+                # this channel; Manage Threads too, so mods automatically see
+                # it without needing to be individually added.
+                thread = await mod_channel.create_thread(
+                    name=f"Review — {interaction.user.display_name}",
+                    type=discord.ChannelType.private_thread,
+                    reason="Manual review requested",
+                )
+                await thread.add_user(interaction.user)
+                ping = f"<@&{config.MOD_PING_ROLE_ID}>" if config.MOD_PING_ROLE_ID else None
+                await thread.send(content=ping, embed=embed, view=CloseThreadView())
                 posted_to_mods = True
             except discord.Forbidden:
-                # A permission gap in the mod channel shouldn't also silently
-                # eat the user's confirmation below -- tell them honestly
-                # instead of leaving the click looking like it did nothing.
-                print(f"[discord_bot] missing permission to post in MOD_REVIEW_CHANNEL_ID (manual review, user={interaction.user.id})")
+                # No thread permission -- fall back to the old flat-embed
+                # post so the request isn't silently lost, same defensive
+                # pattern used everywhere else in this file.
+                try:
+                    await mod_channel.send(embed=embed)
+                    posted_to_mods = True
+                except discord.Forbidden:
+                    print(f"[discord_bot] missing permission to create thread or post in MOD_REVIEW_CHANNEL_ID (manual review, user={interaction.user.id})")
 
         await interaction.followup.send(
             "Sent to the mod team — someone will follow up soon."
@@ -407,6 +425,24 @@ class ManualReviewModal(discord.ui.Modal, title="Request Manual Review"):
                 await self._original_message.edit(view=None)
             except discord.HTTPException:
                 pass
+
+
+class CloseThreadView(discord.ui.View):
+    """Persistent -- posted inside a manual-review thread. Handled by the raw
+    on_interaction listener below (same pattern as request_review/verify_button),
+    not a bound callback, since it needs to survive restarts without being
+    re-attached to a specific message.
+    """
+
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(
+            discord.ui.Button(
+                label="Close Thread",
+                style=discord.ButtonStyle.success,
+                custom_id="close_review_thread",
+            )
+        )
 
 
 class ManualReviewView(discord.ui.View):
@@ -434,14 +470,38 @@ async def on_interaction(interaction: discord.Interaction) -> None:
     if interaction.type != discord.InteractionType.component:
         return
     custom_id = interaction.data.get("custom_id", "") if interaction.data else ""
-    if custom_id != "request_review":
+
+    if custom_id == "request_review":
+        # Opening a modal must be the direct, immediate response to the click
+        # -- no defer() first. The modal's own on_submit handles the rest of
+        # the flow (including its own 3-second-response timing) once submitted.
+        original_embed = interaction.message.embeds[0] if interaction.message and interaction.message.embeds else None
+        await interaction.response.send_modal(ManualReviewModal(original_embed, interaction.message))
         return
 
-    # Opening a modal must be the direct, immediate response to the click --
-    # no defer() first. The modal's own on_submit handles the rest of the
-    # flow (including its own 3-second-response timing) once submitted.
-    original_embed = interaction.message.embeds[0] if interaction.message and interaction.message.embeds else None
-    await interaction.response.send_modal(ManualReviewModal(original_embed, interaction.message))
+    if custom_id == "close_review_thread":
+        channel = interaction.channel
+        # Live permission check against the parent channel, not a stored mod
+        # role list -- the requesting user is a thread member too by now, and
+        # this is what actually stops them from closing their own thread.
+        perms = (
+            channel.parent.permissions_for(interaction.user)
+            if isinstance(channel, discord.Thread) and channel.parent
+            else None
+        )
+        if not perms or not perms.manage_threads:
+            await interaction.response.send_message("Only mods can close this.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        try:
+            await channel.send(f"✅ Resolved by {await mention_with_name(interaction.user.id)}")
+            await channel.edit(archived=True, locked=True)
+            await interaction.followup.send("Closed.", ephemeral=True)
+        except discord.HTTPException:
+            await interaction.followup.send(
+                "Couldn't close the thread — try again or close it manually.", ephemeral=True
+            )
+        return
 
 
 # ---------------------------------------------------------------------------
@@ -859,6 +919,7 @@ async def on_ready() -> None:
         # already-acknowledged interaction). Register exactly once.
         bot.add_view(VerifyView())
         bot.add_view(ManualReviewView())
+        bot.add_view(CloseThreadView())
         _views_registered = True
     # Slash commands persist server-side once registered -- they don't need
     # re-syncing on every restart, and Discord's command-sync endpoint has a

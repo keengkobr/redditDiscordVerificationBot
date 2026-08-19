@@ -26,6 +26,9 @@ VERIFIED_ROLE_ID = _get_int("VERIFIED_ROLE_ID", 0)
 # before this bot ever sees them. Removed on a pass so a verified member
 # doesn't end up holding both roles at once (DEVVIT_PIVOT_SPEC.md v5).
 UNVERIFIED_ROLE_ID = _get_int("UNVERIFIED_ROLE_ID", 0)
+# Pinged in the opening message of a manual-review thread. Optional -- blank
+# means no ping, mods just rely on channel/thread notifications.
+MOD_PING_ROLE_ID = _get_int("MOD_PING_ROLE_ID", 0)
 VERIFICATION_LOG_CHANNEL_ID = _get_int("VERIFICATION_LOG_CHANNEL_ID", 0)
 # Hidden, bot-only channel discord_bot.py posts/reads a Discord Incoming
 # Webhook on -- the Devvit app's verdict hand-off (DEVVIT_PIVOT_SPEC.md v4).
