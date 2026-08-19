@@ -344,6 +344,71 @@ async def send_code_dm(destination, discord_user_id: str, session: dict) -> None
 # Manual review request (from a fail DM)
 # ---------------------------------------------------------------------------
 
+class ManualReviewModal(discord.ui.Modal, title="Request Manual Review"):
+    """Shown when the user clicks Request Manual Review -- collects a short
+    note on why they think the result was wrong, since a mod reading the
+    flag with no context has to guess. original_embed/original_message are
+    captured at button-click time (before the modal opens) since a modal
+    submission is its own separate interaction and doesn't carry a reference
+    back to the message that spawned it.
+    """
+
+    note = discord.ui.TextInput(
+        label="Why do you think this is a mistake? (optional)",
+        style=discord.TextStyle.paragraph,
+        placeholder="e.g. My profile is set to private, or I've been more active recently.",
+        required=False,
+        max_length=500,
+    )
+
+    def __init__(self, original_embed: discord.Embed | None, original_message: discord.Message | None):
+        super().__init__()
+        self._original_embed = original_embed
+        self._original_message = original_message
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        # Discord requires a response within 3 seconds or shows "didn't
+        # respond in time" -- defer immediately and do the real work via a
+        # followup so a slow mod-channel send can't blow that window.
+        await interaction.response.defer(ephemeral=True)
+
+        mod_channel = bot.get_channel(config.MOD_REVIEW_CHANNEL_ID)
+        posted_to_mods = False
+        if mod_channel:
+            embed = discord.Embed(
+                title="🔎 Manual Review Requested",
+                description=await mention_with_name(interaction.user.id),
+                color=COLOR_SOFT_FAIL,
+            )
+            if self._original_embed:
+                if self._original_embed.description:
+                    embed.description += f"\n{self._original_embed.description}"
+                for field in self._original_embed.fields:
+                    embed.add_field(name=field.name, value=field.value, inline=field.inline)
+            if self.note.value:
+                embed.add_field(name="User's note", value=self.note.value, inline=False)
+            try:
+                await mod_channel.send(embed=embed)
+                posted_to_mods = True
+            except discord.Forbidden:
+                # A permission gap in the mod channel shouldn't also silently
+                # eat the user's confirmation below -- tell them honestly
+                # instead of leaving the click looking like it did nothing.
+                print(f"[discord_bot] missing permission to post in MOD_REVIEW_CHANNEL_ID (manual review, user={interaction.user.id})")
+
+        await interaction.followup.send(
+            "Sent to the mod team — someone will follow up soon."
+            if posted_to_mods
+            else "Couldn't reach the mod-review channel — let a mod know directly for now.",
+            ephemeral=True,
+        )
+        if self._original_message:
+            try:
+                await self._original_message.edit(view=None)
+            except discord.HTTPException:
+                pass
+
+
 class ManualReviewView(discord.ui.View):
     """Persistent (survives restarts) -- the button's custom_id carries no
     per-message data on purpose. There's nothing left to look up by the time
@@ -372,46 +437,11 @@ async def on_interaction(interaction: discord.Interaction) -> None:
     if custom_id != "request_review":
         return
 
-    # Discord requires a response within 3 seconds or shows "didn't respond in
-    # time" -- defer immediately and do the real work via a followup so a slow
-    # mod-channel send can't blow that window.
-    await interaction.response.defer(ephemeral=True)
-
+    # Opening a modal must be the direct, immediate response to the click --
+    # no defer() first. The modal's own on_submit handles the rest of the
+    # flow (including its own 3-second-response timing) once submitted.
     original_embed = interaction.message.embeds[0] if interaction.message and interaction.message.embeds else None
-
-    mod_channel = bot.get_channel(config.MOD_REVIEW_CHANNEL_ID)
-    posted_to_mods = False
-    if mod_channel:
-        embed = discord.Embed(
-            title="🔎 Manual Review Requested",
-            description=await mention_with_name(interaction.user.id),
-            color=COLOR_SOFT_FAIL,
-        )
-        if original_embed:
-            if original_embed.description:
-                embed.description += f"\n{original_embed.description}"
-            for field in original_embed.fields:
-                embed.add_field(name=field.name, value=field.value, inline=field.inline)
-        try:
-            await mod_channel.send(embed=embed)
-            posted_to_mods = True
-        except discord.Forbidden:
-            # A permission gap in the mod channel shouldn't also silently eat
-            # the user's confirmation below -- tell them honestly instead of
-            # leaving the click looking like it did nothing.
-            print(f"[discord_bot] missing permission to post in MOD_REVIEW_CHANNEL_ID (manual review, user={interaction.user.id})")
-
-    await interaction.followup.send(
-        "Sent to the mod team — someone will follow up soon."
-        if posted_to_mods
-        else "Couldn't reach the mod-review channel — let a mod know directly for now.",
-        ephemeral=True,
-    )
-    if interaction.message:
-        try:
-            await interaction.message.edit(view=None)
-        except discord.HTTPException:
-            pass
+    await interaction.response.send_modal(ManualReviewModal(original_embed, interaction.message))
 
 
 # ---------------------------------------------------------------------------
