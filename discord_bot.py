@@ -132,6 +132,23 @@ def _requirement_lines(row: dict) -> list[str]:
     ]
 
 
+async def mention_with_name(discord_user_id) -> str:
+    """<@id> mention plus a plaintext username fallback, e.g. "<@123> (name)".
+    Discord clients sometimes render a mention as the raw numeric ID instead
+    of resolving it (client-side cache lag) -- a mod reading the log/mod
+    channel then has no way to tell who that actually is. The plaintext name
+    means they can still identify the user even when that happens.
+    """
+    uid = int(discord_user_id)
+    user = bot.get_user(uid)  # cache-only, no API call
+    if user is None:
+        try:
+            user = await bot.fetch_user(uid)
+        except discord.HTTPException:
+            user = None
+    return f"<@{uid}> ({user.name})" if user else f"<@{uid}>"
+
+
 # ---------------------------------------------------------------------------
 # Username claim normalization + code<->claim encoding
 # ---------------------------------------------------------------------------
@@ -367,7 +384,7 @@ async def on_interaction(interaction: discord.Interaction) -> None:
     if mod_channel:
         embed = discord.Embed(
             title="🔎 Manual Review Requested",
-            description=f"<@{interaction.user.id}>",
+            description=await mention_with_name(interaction.user.id),
             color=COLOR_SOFT_FAIL,
         )
         if original_embed:
@@ -622,11 +639,10 @@ async def flag_username_mismatch_for_mods(row: dict) -> None:
     mod_channel = bot.get_channel(config.MOD_REVIEW_CHANNEL_ID)
     if not mod_channel:
         return
+    who = await mention_with_name(row["discord_user_id"])
     embed = discord.Embed(
         title="🔎 Manual Review Requested — Username Mismatch",
-        description=(
-            f"<@{row['discord_user_id']}> — last claimed u/{row['reddit_username']}"
-        ),
+        description=f"{who} — last claimed u/{row['reddit_username']}",
         color=COLOR_SOFT_FAIL,
     )
     embed.add_field(name="Reason", value=FAIL_REASON_TEXT[row["fail_reason"]], inline=False)
@@ -695,10 +711,11 @@ async def handle_result(row: dict) -> None:
         if row["fail_reason"] == "no_visible_activity":
             mod_channel = bot.get_channel(config.MOD_REVIEW_CHANNEL_ID)
             if mod_channel:
+                who = await mention_with_name(row["discord_user_id"])
                 embed = discord.Embed(
                     title="⚠️ Possible Hidden Profile",
                     description=(
-                        f"<@{row['discord_user_id']}> verified as **u/{row['reddit_username']}** "
+                        f"{who} verified as **u/{row['reddit_username']}** "
                         f"but no visible r/{config.SUBREDDIT_NAME} activity was found."
                     ),
                     color=COLOR_SOFT_FAIL,
@@ -723,7 +740,7 @@ async def post_verification_log(row: dict) -> None:
     if not channel:
         return  # Not configured — logging is optional.
 
-    mention = f"<@{row['discord_user_id']}>"
+    mention = await mention_with_name(row["discord_user_id"])
     reddit_username = row["reddit_username"] or "unknown"
 
     if row["status"] == "verified":
