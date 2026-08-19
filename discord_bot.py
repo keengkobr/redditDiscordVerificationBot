@@ -408,15 +408,21 @@ class ManualReviewModal(discord.ui.Modal, title="Request Manual Review"):
                 ping = " ".join(f"<@&{role_id}>" for role_id in config.MOD_PING_ROLE_IDS) or None
                 await thread.send(content=ping, embed=embed, view=CloseThreadView())
                 posted_to_mods = True
-            except discord.Forbidden:
-                # No thread permission -- fall back to the old flat-embed
-                # post so the request isn't silently lost, same defensive
-                # pattern used everywhere else in this file.
+                print(f"[discord_bot] manual review: created thread {thread.id} for user={interaction.user.id}")
+            except discord.HTTPException as exc:
+                # Widened from just discord.Forbidden -- e.g. private threads
+                # can also fail with a plain HTTPException if the guild lacks
+                # some prerequisite, which a narrow except wouldn't catch at
+                # all. Logging the real exception here since both the thread
+                # and fallback paths were previously silent on success,
+                # making this failure mode indistinguishable from working.
+                print(f"[discord_bot] manual review: create_thread/add_user/send failed for user={interaction.user.id}: {exc!r}")
                 try:
                     await mod_channel.send(embed=embed)
                     posted_to_mods = True
-                except discord.Forbidden:
-                    print(f"[discord_bot] missing permission to create thread or post in MOD_REVIEW_CHANNEL_ID (manual review, user={interaction.user.id})")
+                    print(f"[discord_bot] manual review: fell back to flat embed in MOD_REVIEW_CHANNEL_ID for user={interaction.user.id}")
+                except discord.HTTPException as exc2:
+                    print(f"[discord_bot] manual review: fallback post also failed for user={interaction.user.id}: {exc2!r}")
 
         await interaction.followup.send(
             "Sent to the mod team — someone will follow up soon."
