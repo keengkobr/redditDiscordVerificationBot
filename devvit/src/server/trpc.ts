@@ -59,7 +59,15 @@ export const appRouter = t.router({
           };
         }
 
-        const username = await reddit.getCurrentUsername();
+        // reddit.getCurrentUsername() isn't a plain context read -- it makes
+        // its own API call (User.getById) to fetch full user details, and
+        // silently returns undefined if THAT call fails for any reason
+        // (rate limit, transient API hiccup, etc.), indistinguishable from
+        // "not logged in" (confirmed in practice: a real, non-banned account
+        // hit this repeatedly). context.username is populated directly from
+        // the request's own auth data with no extra API round-trip, so it's
+        // a much more reliable fallback for exactly this failure mode.
+        const username = (await reddit.getCurrentUsername()) ?? context.username;
         if (!username) {
           // Reddit's own platform won't resolve an identity here for a few
           // reasons -- a suspended/banned account is one (seen in practice:
@@ -69,7 +77,7 @@ export const appRouter = t.router({
           // through the normal fail path (a real verdict, not just an inline
           // message) rather than leaving the user stuck with no way forward
           // and mods with zero visibility that this happened at all.
-          console.error('[verify.submit] no username resolved from context');
+          console.error(`[verify.submit] no username resolved from context (userId=${context.userId ?? 'none'})`);
           try {
             await postVerdict({
               code: claim.shortId,
